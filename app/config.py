@@ -1,5 +1,8 @@
 """
 Конфигурация приложения Ask Bot
+
+Этот файл содержит только структуру настроек и безопасные значения по умолчанию.
+Реальные настройки должны быть в .env файле!
 """
 import os
 from typing import Optional
@@ -22,31 +25,33 @@ class Settings(BaseSettings):
     # ОСНОВНЫЕ НАСТРОЙКИ ПРИЛОЖЕНИЯ
     # ==============================================
     app_mode: str = "development"
-    secret_key: str = "your-super-secret-key-change-this-immediately"
+    secret_key: str = "change-this-secret-key-in-production"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     log_level: str = "INFO"
     
     # ==============================================
     # НАСТРОЙКИ MATTERMOST
+    # Реальные значения должны быть в .env файле!
     # ==============================================
-    mattermost_url: str = "https://your-mattermost.example.com"
-    mattermost_token: str = "your-mattermost-bot-token"
+    mattermost_url: str = ""  # Обязательно: URL вашего Mattermost
+    mattermost_token: str = ""  # Обязательно: Токен бота
     mattermost_bot_username: str = "askbot"
-    mattermost_team_id: str = "your-team-id"
-    mattermost_ssl_verify: bool = False
+    mattermost_team_id: str = ""  # Обязательно: ID команды
+    mattermost_ssl_verify: bool = True  # Для безопасности по умолчанию True
     
     # ==============================================
-    # НАСТРОЙКИ JIRA
+    # НАСТРОЙКИ JIRA  
+    # Реальные значения должны быть в .env файле!
     # ==============================================
-    jira_base_url: str = "https://your-company.atlassian.net"
+    jira_base_url: str = ""  # Обязательно: URL вашего Jira
     jira_credentials_field: str = ""
     
     # ==============================================
     # НАСТРОЙКИ LLM (ЛОКАЛЬНАЯ МОДЕЛЬ)
     # ==============================================
-    llm_proxy_url: str = "http://localhost:11434"
-    llm_proxy_token: str = "your-llm-proxy-token"
+    llm_proxy_url: str = "http://localhost:11434"  # Ollama по умолчанию
+    llm_proxy_token: str = ""  # Опционально
     llm_model_name: str = "llama2"
     llm_max_tokens: int = 2048
     llm_temperature: float = 0.3
@@ -55,14 +60,14 @@ class Settings(BaseSettings):
     # ==============================================
     # НАСТРОЙКИ БАЗЫ ДАННЫХ
     # ==============================================
-    database_url: str = "sqlite:///./askbot.db"
+    database_url: str = "sqlite:///./askbot.db"  # По умолчанию SQLite
     database_auto_create: bool = True
     
     # ==============================================
     # НАСТРОЙКИ REDIS (КЕШИРОВАНИЕ)
     # ==============================================
-    redis_url: str = "redis://localhost:6379/0"
-    cache_ttl: int = 3600
+    redis_url: str = "redis://localhost:6379/0"  # Локальный Redis по умолчанию
+    cache_ttl: int = 3600  # 1 час
     cache_max_size: int = 10000
     
     # ==============================================
@@ -76,24 +81,48 @@ class Settings(BaseSettings):
     # НАСТРОЙКИ ГРАФИКОВ
     # ==============================================
     charts_dir: str = "./charts"
-    charts_ttl: int = 86400
+    charts_ttl: int = 86400  # 24 часа
     charts_format: str = "png"
     charts_dpi: int = 300
     
     # ==============================================
     # НАСТРОЙКИ БЕЗОПАСНОСТИ
     # ==============================================
-    cors_origins: str = "*"
-    session_ttl: int = 86400
-    debug_endpoints_enabled: bool = True
+    cors_origins: str = "*"  # В продакшене нужно ограничить!
+    session_ttl: int = 86400  # 24 часа
+    debug_endpoints_enabled: bool = True  # В продакшене False!
     
     # ==============================================
     # ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ
     # ==============================================
     default_timezone: str = "Europe/Moscow"
     default_language: str = "ru"
-    max_file_size: int = 10485760
-    sql_echo: bool = False
+    max_file_size: int = 10485760  # 10MB
+    sql_echo: bool = False  # True для отладки SQL
+    
+    # ==============================================
+    # ВАЛИДАЦИЯ ОБЯЗАТЕЛЬНЫХ НАСТРОЕК
+    # ==============================================
+    def validate_required_settings(self) -> None:
+        """Проверяет что все обязательные настройки заполнены"""
+        required_fields = {
+            'mattermost_url': 'URL Mattermost сервера',
+            'mattermost_token': 'Токен Mattermost бота',
+            'mattermost_team_id': 'ID команды в Mattermost',
+            'jira_base_url': 'URL Jira сервера'
+        }
+        
+        missing_fields = []
+        for field, description in required_fields.items():
+            if not getattr(self, field, None):
+                missing_fields.append(f"{field} ({description})")
+        
+        if missing_fields:
+            raise ValueError(
+                f"Отсутствуют обязательные настройки в .env файле:\n" +
+                "\n".join([f"- {field}" for field in missing_fields]) +
+                f"\n\nПроверьте файл .env и заполните необходимые параметры."
+            )
     
     # ==============================================
     # ОБРАТНАЯ СОВМЕСТИМОСТЬ
@@ -150,4 +179,9 @@ class Settings(BaseSettings):
 
 
 # Глобальный экземпляр настроек
-settings = Settings() 
+settings = Settings()
+
+# Проверяем обязательные настройки при импорте
+# (только в продакшн режиме, чтобы не мешать разработке)
+if os.getenv("APP_MODE", "development") == "production":
+    settings.validate_required_settings() 
