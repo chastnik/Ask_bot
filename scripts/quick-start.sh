@@ -84,6 +84,7 @@ EOF
     
     source venv/bin/activate
     pip install --upgrade pip > /dev/null 2>&1
+    pip install --upgrade setuptools wheel > /dev/null 2>&1
     pip install -r requirements.txt > /dev/null 2>&1
     print_success "Зависимости установлены"
     

@@ -84,7 +84,12 @@ install_dependencies() {
     print_info "Проверяем и устанавливаем зависимости..."
     
     # Обновляем pip
+    print_info "Обновляем pip..."
     pip install --upgrade pip > /dev/null 2>&1
+    
+    # Устанавливаем базовые пакеты для сборки (важно для Python 3.13+)
+    print_info "Устанавливаем базовые пакеты для сборки..."
+    pip install --upgrade setuptools wheel > /dev/null 2>&1
     
     # Устанавливаем зависимости
     if [ -f "requirements.txt" ]; then

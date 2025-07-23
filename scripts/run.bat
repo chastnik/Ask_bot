@@ -77,7 +77,12 @@ REM Установка зависимостей
 echo ℹ️  Проверяем и устанавливаем зависимости...
 
 REM Обновляем pip
+echo ℹ️  Обновляем pip...
 python -m pip install --upgrade pip >nul 2>&1
+
+REM Устанавливаем базовые пакеты для сборки (важно для Python 3.13+)
+echo ℹ️  Устанавливаем базовые пакеты для сборки...
+pip install --upgrade setuptools wheel >nul 2>&1
 
 REM Устанавливаем зависимости
 if exist "requirements.txt" (

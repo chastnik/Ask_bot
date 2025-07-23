@@ -1,3 +1,7 @@
+# Базовые пакеты для сборки
+setuptools>=65.0.0
+wheel>=0.38.0
+
 # FastAPI и веб-сервер
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
