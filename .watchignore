@@ -1,0 +1,13 @@
+# Исключаем из наблюдения за изменениями файлов
+venv/
+.venv/
+venv/*
+.venv/*
+*.egg-info/
+__pycache__/
+.git/
+.pytest_cache/
+*.log
+*.db
+charts/
+logs/ 

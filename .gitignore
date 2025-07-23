@@ -135,4 +135,7 @@ charts/
 .vscode/
 .idea/
 *.swp
-*.swo 
+*.swo
+
+# Watchfiles ignore patterns (для исключения из reload)
+# .watchignore не исключаем - он нужен в репозитории 

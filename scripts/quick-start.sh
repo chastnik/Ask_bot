@@ -128,7 +128,7 @@ EOF
     echo
     print_info "Для остановки нажмите Ctrl+C"
     
-    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude="venv/*" --reload-exclude="*.egg-info/*"
 }
 
 # Проверяем, что мы в правильной директории
