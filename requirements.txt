@@ -12,7 +12,6 @@ httpx==0.25.2
 # База данных и ORM
 sqlalchemy==2.0.23
 alembic==1.13.1
-sqlite3
 
 # Кеширование
 redis==5.0.1
