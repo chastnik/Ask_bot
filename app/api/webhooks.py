@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from app.models.schemas import SlashCommandRequest, SlashCommandResponse
+from app.models.schemas import SlashCommandRequest, SlashCommandResponse, DirectMessageRequest
 from app.services.jira_service import jira_service, JiraAPIError, JiraAuthError
 from app.services.mattermost_service import mattermost_service
 from app.services.llm_service import llm_service
@@ -22,6 +22,56 @@ router = APIRouter()
 
 class BotLogic:
     """Основная логика бота"""
+    
+    @staticmethod
+    async def process_direct_message(user_query: str, user_id: str, user_name: str, channel_id: str) -> Dict[str, Any]:
+        """
+        Обрабатывает личное сообщение пользователя
+        
+        Args:
+            user_query: Сообщение пользователя
+            user_id: ID пользователя Mattermost
+            user_name: Имя пользователя
+            channel_id: ID канала (для личных сообщений)
+            
+        Returns:
+            Ответ для отправки в личные сообщения
+        """
+        start_time = time.time()
+        
+        try:
+            # Проверяем специальные команды
+            query_lower = user_query.strip().lower()
+            
+            # Команда помощи
+            if query_lower in ['помощь', 'help', 'что ты умеешь', 'команды']:
+                return await BotLogic._handle_help_dm()
+            
+            # Команда авторизации
+            if query_lower.startswith('авторизация') or query_lower.startswith('auth'):
+                return await BotLogic._handle_auth_dm(user_query, user_id)
+            
+            # Команда статуса
+            if query_lower in ['статус', 'status', 'мой статус']:
+                return await BotLogic._handle_status_dm(user_id)
+            
+            # Команда проекты
+            if query_lower in ['проекты', 'projects', 'мои проекты']:
+                return await BotLogic._handle_projects_dm(user_id)
+            
+            # Команды кеша
+            if query_lower.startswith('кеш') or query_lower.startswith('cache'):
+                return await BotLogic._handle_cache_dm(query_lower, user_id)
+                
+            # Обычный запрос - обрабатываем через LLM и Jira
+            return await BotLogic._process_jira_query_dm(user_query, user_id, user_name, channel_id)
+            
+        except Exception as e:
+            logger.error(f"Ошибка обработки личного сообщения от {user_name}: {e}")
+            return {
+                "text": f"❌ Произошла ошибка при обработке запроса: {str(e)}",
+                "response_type": "ephemeral"
+            }
     
     @staticmethod
     async def process_user_query(user_query: str, user_id: str, channel_id: str) -> SlashCommandResponse:
@@ -455,9 +505,325 @@ async def handle_cache_stats_command() -> SlashCommandResponse:
         
     except Exception as e:
         logger.error(f"Ошибка получения статистики кеша: {e}")
-        return mattermost_service.create_error_response(
-            "Не удалось получить статистику кеша"
-        )
+        return mattermost_service.create_error_response("Не удалось получить статистику кеша")
+
+
+    # Методы для обработки личных сообщений
+    @staticmethod
+    async def _handle_help_dm() -> Dict[str, Any]:
+        """Обработка команды помощи в личных сообщениях"""
+        help_text = """
+🤖 **Ask Bot - Ваш помощник по Jira**
+
+**Как пользоваться:**
+Просто напишите мне запрос на естественном языке!
+
+**Примеры запросов:**
+• "Покажи мои открытые задачи"
+• "Сколько багов в проекте PROJECT_KEY?"
+• "Задачи без исполнителя в проекте ABC"
+• "Статистика по исполнителям за последний месяц"
+• "Просроченные задачи в проекте XYZ"
+
+**Специальные команды:**
+• `помощь` - показать это сообщение
+• `авторизация [логин] [пароль/токен]` - войти в Jira
+• `статус` - проверить статус авторизации
+• `проекты` - список доступных проектов
+• `кеш очистить` - очистить кеш
+• `кеш статистика` - статистика кеша
+
+**Создание графиков:**
+Добавьте "покажи как график" к любому запросу для визуализации!
+
+Пример: "Задачи по статусам в проекте ABC покажи как график"
+"""
+        return {"text": help_text}
+
+    @staticmethod
+    async def _handle_auth_dm(user_query: str, user_id: str) -> Dict[str, Any]:
+        """Обработка авторизации в личных сообщениях"""
+        parts = user_query.strip().split()
+        
+        if len(parts) < 3:
+            return {
+                "text": """
+🔐 **Авторизация в Jira**
+
+**Формат команды:**
+`авторизация [логин] [пароль/токен]`
+
+**Примеры:**
+• `авторизация user@company.com mypassword`
+• `авторизация username api_token_here`
+
+**Для Jira Cloud рекомендуется использовать API токен вместо пароля.**
+"""
+            }
+        
+        username = parts[1]
+        password = parts[2]
+        
+        try:
+            # Тестируем подключение к Jira
+            test_result = await jira_service.test_credentials(username, password)
+            
+            if test_result:
+                # Сохраняем учетные данные в кеше
+                async with cache_service as cache:
+                    await cache.cache_user_credentials(user_id, username, password)
+                
+                return {
+                    "text": f"✅ Успешная авторизация в Jira как {username}"
+                }
+            else:
+                return {
+                    "text": "❌ Неверные учетные данные для Jira. Проверьте логин и пароль/токен."
+                }
+                
+        except Exception as e:
+            logger.error(f"Ошибка авторизации для пользователя {user_id}: {e}")
+            return {
+                "text": f"❌ Ошибка при авторизации: {str(e)}"
+            }
+
+    @staticmethod
+    async def _handle_status_dm(user_id: str) -> Dict[str, Any]:
+        """Проверка статуса авторизации в личных сообщениях"""
+        try:
+            async with cache_service as cache:
+                credentials = await cache.get_cached_user_credentials(user_id)
+                
+            if credentials:
+                # Проверяем, что учетные данные все еще действительны
+                test_result = await jira_service.test_credentials(
+                    credentials['username'], 
+                    credentials['password']
+                )
+                
+                if test_result:
+                    return {
+                        "text": f"✅ Вы авторизованы в Jira как **{credentials['username']}**"
+                    }
+                else:
+                    # Удаляем недействительные учетные данные
+                    await cache.clear_user_credentials(user_id)
+                    return {
+                        "text": "❌ Ваши учетные данные устарели. Необходимо повторить авторизацию."
+                    }
+            else:
+                return {
+                    "text": """
+❌ **Вы не авторизованы в Jira**
+
+Для авторизации используйте команду:
+`авторизация [логин] [пароль/токен]`
+"""
+                }
+                
+        except Exception as e:
+            logger.error(f"Ошибка проверки статуса для пользователя {user_id}: {e}")
+            return {
+                "text": f"❌ Ошибка при проверке статуса: {str(e)}"
+            }
+
+    @staticmethod
+    async def _handle_projects_dm(user_id: str) -> Dict[str, Any]:
+        """Получение списка проектов в личных сообщениях"""
+        try:
+            async with cache_service as cache:
+                credentials = await cache.get_cached_user_credentials(user_id)
+                
+            if not credentials:
+                return {
+                    "text": "❌ Необходимо авторизоваться в Jira. Используйте: `авторизация [логин] [пароль]`"
+                }
+            
+            # Получаем список проектов
+            projects = await jira_service.get_projects(
+                credentials['username'],
+                credentials['password']
+            )
+            
+            if projects:
+                projects_text = "📋 **Доступные проекты Jira:**\n\n"
+                for project in projects[:20]:  # Ограничиваем вывод
+                    projects_text += f"• **{project.get('key')}** - {project.get('name')}\n"
+                
+                if len(projects) > 20:
+                    projects_text += f"\n... и еще {len(projects) - 20} проектов"
+                    
+                return {"text": projects_text}
+            else:
+                return {
+                    "text": "📋 Проекты не найдены или у вас нет доступа к ним."
+                }
+                
+        except Exception as e:
+            logger.error(f"Ошибка получения проектов для пользователя {user_id}: {e}")
+            return {
+                "text": f"❌ Ошибка при получении списка проектов: {str(e)}"
+            }
+
+    @staticmethod
+    async def _handle_cache_dm(query: str, user_id: str) -> Dict[str, Any]:
+        """Обработка команд кеша в личных сообщениях"""
+        if 'очистить' in query or 'clear' in query:
+            try:
+                async with cache_service as cache:
+                    await cache.clear_user_cache(user_id)
+                return {
+                    "text": "✅ Ваш кеш очищен"
+                }
+            except Exception as e:
+                return {
+                    "text": f"❌ Ошибка очистки кеша: {str(e)}"
+                }
+                
+        elif 'статистик' in query or 'stats' in query:
+            try:
+                async with cache_service as cache:
+                    stats = await cache.get_cache_stats()
+                
+                stats_text = f"""
+📊 **Статистика кеша:**
+
+• **Всего ключей:** {stats.get('total_keys', 0)}
+• **Использование памяти:** {stats.get('memory_usage', 'N/A')}
+• **Hit Rate:** {stats.get('hit_rate', 0)}%
+
+**Типы ключей:**
+"""
+                for key_type, count in stats.get('key_types', {}).items():
+                    stats_text += f"• {key_type}: {count}\n"
+                    
+                return {"text": stats_text}
+                
+            except Exception as e:
+                return {
+                    "text": f"❌ Ошибка получения статистики: {str(e)}"
+                }
+        else:
+            return {
+                "text": """
+**Команды кеша:**
+• `кеш очистить` - очистить ваш кеш
+• `кеш статистика` - показать статистику кеша
+"""
+            }
+
+    @staticmethod
+    async def _process_jira_query_dm(user_query: str, user_id: str, user_name: str, channel_id: str) -> Dict[str, Any]:
+        """Обработка запроса к Jira в личных сообщениях"""
+        try:
+            # Получаем учетные данные пользователя из кеша
+            async with cache_service as cache:
+                credentials = await cache.get_cached_user_credentials(user_id)
+                
+            if not credentials:
+                return {
+                    "text": """
+❌ **Необходимо авторизоваться в Jira**
+
+Используйте команду:
+`авторизация [логин] [пароль/токен]`
+
+Пример: `авторизация user@company.com mytoken`
+"""
+                }
+            
+            # Анализируем запрос с помощью LLM
+            try:
+                intent = await llm_service.analyze_intent(user_query)
+                logger.info(f"Определен intent: {intent}")
+            except Exception as e:
+                logger.warning(f"Ошибка анализа intent: {e}")
+                intent = {"type": "search", "needs_chart": False}
+            
+            # Генерируем JQL запрос
+            try:
+                # TODO: Реализовать получение из базы данных
+                user_context = {"projects": [], "recent_queries": []}
+                
+                jql = await llm_service.generate_jql(user_query, user_context)
+                logger.info(f"Сгенерирован JQL: {jql}")
+            except Exception as e:
+                logger.error(f"Ошибка генерации JQL: {e}")
+                return {
+                    "text": f"❌ Не удалось понять запрос: {str(e)}"
+                }
+            
+            # Выполняем запрос к Jira
+            try:
+                issues = await jira_service.search_issues(
+                    jql,
+                    credentials['username'],
+                    credentials['password'],
+                    max_results=50
+                )
+                
+                logger.info(f"Найдено задач: {len(issues) if issues else 0}")
+                
+            except JiraAuthError:
+                # Удаляем недействительные учетные данные
+                async with cache_service as cache:
+                    await cache.clear_user_credentials(user_id)
+                return {
+                    "text": "❌ Ошибка авторизации в Jira. Необходимо повторить авторизацию."
+                }
+            except JiraAPIError as e:
+                return {
+                    "text": f"❌ Ошибка Jira API: {str(e)}"
+                }
+            
+            if not issues:
+                return {
+                    "text": "📋 По вашему запросу задачи не найдены."
+                }
+            
+            # Проверяем, нужно ли создавать график
+            needs_chart = intent.get("needs_chart", False) or any(
+                word in user_query.lower() 
+                for word in ["график", "диаграмм", "визуализ", "chart", "покажи как"]
+            )
+            
+            if needs_chart:
+                # Создаем график
+                chart_url = await BotLogic._create_chart_from_issues(issues, intent.get("chart_type", "bar"))
+                
+                if chart_url:
+                    response_text = f"📊 **Результат запроса:** {len(issues)} задач(и)\n\n"
+                    response_text += f"📈 **График:** {chart_url}\n\n"
+                else:
+                    response_text = f"📋 **Найдено задач:** {len(issues)}\n\n"
+                    
+                # Добавляем краткий список задач
+                response_text += "**Найденные задачи:**\n"
+                for issue in issues[:5]:
+                    response_text += f"• **{issue.get('key')}** - {issue.get('fields', {}).get('summary', 'N/A')}\n"
+                
+                if len(issues) > 5:
+                    response_text += f"\n... и еще {len(issues) - 5} задач(и)"
+                
+            else:
+                # Формируем текстовый ответ
+                response_text = f"📋 **Найдено задач:** {len(issues)}\n\n"
+                
+                for issue in issues[:10]:  # Показываем до 10 задач
+                    fields = issue.get('fields', {})
+                    response_text += f"• **{issue.get('key')}** - {fields.get('summary', 'N/A')}\n"
+                    response_text += f"  Статус: {fields.get('status', {}).get('name', 'N/A')}\n\n"
+                
+                if len(issues) > 10:
+                    response_text += f"... и еще {len(issues) - 10} задач(и)"
+            
+            return {"text": response_text}
+            
+        except Exception as e:
+            logger.error(f"Ошибка обработки запроса от {user_name}: {e}")
+            return {
+                "text": f"❌ Произошла ошибка при обработке запроса: {str(e)}"
+            }
 
 
 async def handle_projects_command(user_id: str) -> SlashCommandResponse:
@@ -503,3 +869,115 @@ async def handle_projects_command(user_id: str) -> SlashCommandResponse:
         return mattermost_service.create_error_response(
             "Не удалось получить список проектов"
         ) 
+
+
+@router.post("/message")
+async def handle_direct_message(request: DirectMessageRequest):
+    """
+    Обработчик личных сообщений от Mattermost
+    
+    Этот endpoint обрабатывает обычные сообщения, отправленные боту напрямую,
+    а не slash-команды. Пользователи могут писать естественным языком.
+    """
+    try:
+        logger.info(f"Получено личное сообщение от {request.user_name}: {request.text}")
+        
+        # Игнорируем сообщения от самого бота, чтобы избежать циклов
+        if request.user_name.lower() in ['askbot', 'ask_bot', 'ask-bot']:
+            logger.info("Игнорируем сообщение от самого бота")
+            return {"text": ""}
+        
+        # Игнорируем пустые сообщения
+        if not request.text.strip():
+            return {"text": ""}
+        
+        # Обрабатываем сообщение через основную логику бота
+        response = await BotLogic.process_direct_message(
+            request.text,
+            request.user_id,
+            request.user_name,
+            request.channel_id
+        )
+        
+        # Отправляем ответ обратно в личные сообщения
+        if response.get("text"):
+            try:
+                # Отправляем ответ через Mattermost API
+                await mattermost_service.send_direct_message(
+                    request.user_id,
+                    response["text"]
+                )
+                logger.info(f"Ответ отправлен пользователю {request.user_name}")
+            except Exception as e:
+                logger.error(f"Ошибка отправки ответа в Mattermost: {e}")
+        
+        # Возвращаем пустой ответ, так как уже отправили через API
+        return {"text": ""}
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки личного сообщения от {request.user_name}: {e}")
+        
+        # В случае ошибки пытаемся отправить сообщение об ошибке
+        try:
+            await mattermost_service.send_direct_message(
+                request.user_id,
+                f"❌ Произошла ошибка при обработке вашего сообщения: {str(e)}"
+            )
+        except Exception as send_error:
+            logger.error(f"Не удалось отправить сообщение об ошибке: {send_error}")
+        
+        return {"text": ""}
+
+
+@router.post("/events")
+async def handle_mattermost_events(request: dict):
+    """
+    Обработчик событий от Mattermost (альтернативный способ получения сообщений)
+    
+    Этот endpoint может использоваться для получения событий через Events API
+    вместо прямых сообщений через webhook
+    """
+    try:
+        event_type = request.get("event", {}).get("event", "")
+        
+        # Обрабатываем только события о сообщениях
+        if event_type != "posted":
+            return {"status": "ignored"}
+        
+        post = request.get("event", {}).get("data", {}).get("post", {})
+        
+        # Парсим данные сообщения
+        if post:
+            post_data = eval(post) if isinstance(post, str) else post
+            
+            channel_type = post_data.get("channel_type", "")
+            user_id = post_data.get("user_id", "")
+            message = post_data.get("message", "")
+            channel_id = post_data.get("channel_id", "")
+            
+            # Обрабатываем только личные сообщения (D = Direct)
+            if channel_type == "D" and message.strip():
+                
+                # Получаем информацию о пользователе
+                user_info = await mattermost_service.get_user_info(user_id)
+                user_name = user_info.get("username", "unknown") if user_info else "unknown"
+                
+                # Создаем объект запроса
+                dm_request = DirectMessageRequest(
+                    user_id=user_id,
+                    user_name=user_name,
+                    channel_id=channel_id,
+                    channel_type=channel_type,
+                    team_id=request.get("event", {}).get("data", {}).get("team_id", ""),
+                    text=message,
+                    post_id=post_data.get("id", "")
+                )
+                
+                # Обрабатываем как обычное личное сообщение
+                return await handle_direct_message(dm_request)
+        
+        return {"status": "ok"}
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки события Mattermost: {e}")
+        return {"status": "error", "message": str(e)} 

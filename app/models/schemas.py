@@ -197,6 +197,21 @@ class SlashCommandRequest(BaseSchema):
     trigger_id: Optional[str] = None
 
 
+class DirectMessageRequest(BaseSchema):
+    """Схема входящего личного сообщения от Mattermost"""
+    user_id: str
+    user_name: str
+    channel_id: str
+    channel_type: str
+    team_id: str
+    text: str
+    timestamp: Optional[str] = None
+    post_id: Optional[str] = None
+    
+    class Config:
+        extra = "allow"
+
+
 class SlashCommandResponse(BaseSchema):
     """Схема ответа на slash команду"""
     response_type: str = Field(default="ephemera", pattern=r'^(ephemeral|in_channel)$')

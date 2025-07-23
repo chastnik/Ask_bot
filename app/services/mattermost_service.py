@@ -520,6 +520,128 @@ class MattermostService:
             logger.error(f"Ошибка при получении каналов команды {team_id}: {e}")
             return []
 
+    async def send_direct_message(self, user_id: str, message: str) -> bool:
+        """
+        Отправляет личное сообщение пользователю
+        
+        Args:
+            user_id: ID пользователя в Mattermost
+            message: Текст сообщения
+            
+        Returns:
+            True если сообщение отправлено успешно, False - иначе
+        """
+        try:
+            # Сначала создаем или получаем канал для личных сообщений
+            dm_channel = await self.create_direct_message_channel(user_id)
+            
+            if not dm_channel:
+                logger.error(f"Не удалось создать канал личных сообщений с пользователем {user_id}")
+                return False
+            
+            channel_id = dm_channel.get("id")
+            
+            # Отправляем сообщение в канал
+            url = f"{self.base_url}/api/v4/posts"
+            
+            payload = {
+                "channel_id": channel_id,
+                "message": message
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    headers=self._get_headers(), # Use self._get_headers() for consistency
+                    json=payload,
+                    ssl=self.ssl_verify
+                ) as response:
+                    
+                    if response.status == 201:
+                        logger.info(f"Личное сообщение отправлено пользователю {user_id}")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Ошибка отправки личного сообщения: {response.status} - {error_text}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"Ошибка при отправке личного сообщения пользователю {user_id}: {e}")
+            return False
+
+    async def create_direct_message_channel(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Создает или получает канал для личных сообщений с пользователем
+        
+        Args:
+            user_id: ID пользователя в Mattermost
+            
+        Returns:
+            Информация о канале личных сообщений или None при ошибке
+        """
+        try:
+            url = f"{self.base_url}/api/v4/channels/direct"
+            
+            # Получаем ID текущего бота (нам нужно знать свой ID)
+            bot_user = await self.get_me()
+            if not bot_user:
+                logger.error("Не удалось получить информацию о текущем пользователе (боте)")
+                return None
+            
+            bot_user_id = bot_user.get("id")
+            
+            payload = [bot_user_id, user_id]
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    headers=self._get_headers(), # Use self._get_headers() for consistency
+                    json=payload,
+                    ssl=self.ssl_verify
+                ) as response:
+                    
+                    if response.status in [200, 201]:
+                        channel_data = await response.json()
+                        logger.info(f"Канал личных сообщений создан/получен для пользователя {user_id}")
+                        return channel_data
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Ошибка создания канала личных сообщений: {response.status} - {error_text}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"Ошибка при создании канала личных сообщений с пользователем {user_id}: {e}")
+            return None
+
+    async def get_current_user(self) -> Optional[Dict[str, Any]]:
+        """
+        Получает информацию о текущем пользователе (боте)
+        
+        Returns:
+            Информация о текущем пользователе или None при ошибке
+        """
+        try:
+            url = f"{self.base_url}/api/v4/users/me"
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=self._get_headers(), # Use self._get_headers() for consistency
+                    ssl=self.ssl_verify
+                ) as response:
+                    
+                    if response.status == 200:
+                        user_data = await response.json()
+                        return user_data
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Ошибка получения информации о текущем пользователе: {response.status} - {error_text}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"Ошибка при получении информации о текущем пользователе: {e}")
+            return None
+
 
 # Глобальный экземпляр сервиса
 mattermost_service = MattermostService() 
