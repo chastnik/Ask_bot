@@ -1,55 +1,135 @@
 """
-Конфигурация приложения
+Конфигурация приложения Ask Bot
 """
 import os
 from typing import Optional
+from pydantic import ConfigDict
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    """Настройки приложения"""
+    """Настройки приложения Ask Bot"""
     
-    # Mattermost настройки
-    mattermost_url: str = "https://mm.1bit.support"
-    mattermost_token: str = "n13z7yah1tds3p8i9ohog1baoy"
-    bot_name: str = "ask_bot"
-    mattermost_team_id: str = "j5xmb3iie3n6txowdfu8adn3ma"
-    mattermost_ssl_verify: bool = False
+    # Обновленная конфигурация для Pydantic 2.x
+    model_config = ConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"  # Игнорировать дополнительные поля
+    )
     
-    # Jira настройки
-    jira_url: str = "https://jira.1solution.ru"
-    
-    # LLM настройки
-    llm_proxy_token: str = "8d10b6d4-2e40-42fc-a66a-c9c6bf20c92c"
-    llm_base_url: str = "https://llm.1bitai.ru"
-    llm_model: str = "qwen3:14b"
-    
-    # База данных
-    database_url: str = "sqlite:///./askbot.db"
-    
-    # Redis
-    redis_url: str = "redis://localhost:6379/0"
-    
-    # Общие настройки
+    # ==============================================
+    # ОСНОВНЫЕ НАСТРОЙКИ ПРИЛОЖЕНИЯ
+    # ==============================================
+    app_mode: str = "development"
+    secret_key: str = "your-super-secret-key-change-this-immediately"
+    app_host: str = "0.0.0.0"
+    app_port: int = 8000
     log_level: str = "INFO"
-    secret_key: str = "your-secret-key-here"
-    debug: bool = False
     
-    # Настройки приложения
-    host: str = "0.0.0.0"
-    port: int = 8000
+    # ==============================================
+    # НАСТРОЙКИ MATTERMOST
+    # ==============================================
+    mattermost_url: str = "https://your-mattermost.example.com"
+    mattermost_token: str = "your-mattermost-bot-token"
+    mattermost_bot_username: str = "askbot"
     
-    # RAG настройки
-    embedding_model: str = "all-MiniLM-L6-v2"
-    max_context_length: int = 4000
+    # ==============================================
+    # НАСТРОЙКИ JIRA
+    # ==============================================
+    jira_base_url: str = "https://your-company.atlassian.net"
+    jira_credentials_field: str = ""
     
-    # График настройки
-    chart_save_path: str = "./charts/"
-    chart_url_prefix: str = "http://localhost:8000/charts/"
+    # ==============================================
+    # НАСТРОЙКИ LLM (ЛОКАЛЬНАЯ МОДЕЛЬ)
+    # ==============================================
+    llm_proxy_url: str = "http://localhost:11434"
+    llm_proxy_token: str = "your-llm-proxy-token"
+    llm_model_name: str = "llama2"
+    llm_max_tokens: int = 2048
+    llm_temperature: float = 0.3
+    llm_timeout: int = 60
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    # ==============================================
+    # НАСТРОЙКИ БАЗЫ ДАННЫХ
+    # ==============================================
+    database_url: str = "sqlite:///./askbot.db"
+    database_auto_create: bool = True
+    
+    # ==============================================
+    # НАСТРОЙКИ REDIS (КЕШИРОВАНИЕ)
+    # ==============================================
+    redis_url: str = "redis://localhost:6379/0"
+    cache_ttl: int = 3600
+    cache_max_size: int = 10000
+    
+    # ==============================================
+    # НАСТРОЙКИ RAG СИСТЕМЫ
+    # ==============================================
+    rag_embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    rag_top_k: int = 5
+    rag_similarity_threshold: float = 0.7
+    
+    # ==============================================
+    # НАСТРОЙКИ ГРАФИКОВ
+    # ==============================================
+    charts_dir: str = "./charts"
+    charts_ttl: int = 86400
+    charts_format: str = "png"
+    charts_dpi: int = 300
+    
+    # ==============================================
+    # НАСТРОЙКИ БЕЗОПАСНОСТИ
+    # ==============================================
+    cors_origins: str = "*"
+    session_ttl: int = 86400
+    debug_endpoints_enabled: bool = True
+    
+    # ==============================================
+    # ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ
+    # ==============================================
+    default_timezone: str = "Europe/Moscow"
+    default_language: str = "ru"
+    max_file_size: int = 10485760
+    sql_echo: bool = False
+    
+    # ==============================================
+    # ОБРАТНАЯ СОВМЕСТИМОСТЬ
+    # ==============================================
+    @property
+    def host(self) -> str:
+        """Обратная совместимость для host"""
+        return self.app_host
+    
+    @property
+    def port(self) -> int:
+        """Обратная совместимость для port"""
+        return self.app_port
+    
+    @property
+    def jira_url(self) -> str:
+        """Обратная совместимость для jira_url"""
+        return self.jira_base_url
+        
+    @property
+    def llm_base_url(self) -> str:
+        """Обратная совместимость для llm_base_url"""
+        return self.llm_proxy_url
+        
+    @property
+    def llm_model(self) -> str:
+        """Обратная совместимость для llm_model"""
+        return self.llm_model_name
+        
+    @property
+    def embedding_model(self) -> str:
+        """Обратная совместимость для embedding_model"""
+        return self.rag_embedding_model
+        
+    @property
+    def chart_save_path(self) -> str:
+        """Обратная совместимость для chart_save_path"""
+        return self.charts_dir
 
 
 # Глобальный экземпляр настроек

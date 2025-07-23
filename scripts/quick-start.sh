@@ -42,7 +42,7 @@ quick_setup() {
     if [ ! -f ".env" ]; then
         print_info "Создаем базовую конфигурацию..."
         cat > .env << EOF
-# Ask Bot - Быстрая конфигурация
+# Ask Bot - Быстрая конфигурация для демо
 APP_MODE=development
 SECRET_KEY=demo-secret-key-for-testing-only
 APP_HOST=0.0.0.0
@@ -55,23 +55,39 @@ MATTERMOST_TOKEN=demo-token
 MATTERMOST_BOT_USERNAME=askbot
 
 JIRA_BASE_URL=https://demo.atlassian.net
+JIRA_CREDENTIALS_FIELD=
 
 LLM_PROXY_URL=http://localhost:11434
+LLM_PROXY_TOKEN=demo-llm-token
 LLM_MODEL_NAME=llama2
 LLM_MAX_TOKENS=2048
 LLM_TEMPERATURE=0.3
+LLM_TIMEOUT=60
 
 DATABASE_URL=sqlite:///./askbot_demo.db
 DATABASE_AUTO_CREATE=true
 
 REDIS_URL=redis://localhost:6379/0
 CACHE_TTL=3600
+CACHE_MAX_SIZE=10000
+
+RAG_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+RAG_TOP_K=5
+RAG_SIMILARITY_THRESHOLD=0.7
 
 CHARTS_DIR=./charts
+CHARTS_TTL=86400
 CHARTS_FORMAT=png
+CHARTS_DPI=300
+
+CORS_ORIGINS=*
+SESSION_TTL=86400
+DEBUG_ENDPOINTS_ENABLED=true
 
 DEFAULT_TIMEZONE=Europe/Moscow
 DEFAULT_LANGUAGE=ru
+MAX_FILE_SIZE=10485760
+SQL_ECHO=false
 EOF
         print_success "Базовая конфигурация создана"
     fi
