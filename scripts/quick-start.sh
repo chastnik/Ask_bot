@@ -126,7 +126,22 @@ EOF
     print_warning "   3. Настройте локальную LLM"
     print_warning "   4. Настройте Redis для кеширования"
     echo
+    # Проверяем запущенные экземпляры
+    print_info "Проверяем запущенные экземпляры..."
+    RUNNING_PIDS=$(ps aux | grep -E "uvicorn.*app\.main:app" | grep -v grep | awk '{print $2}')
+    
+    if [ ! -z "$RUNNING_PIDS" ]; then
+        print_warning "Найдены запущенные экземпляры Ask Bot (PID: $(echo $RUNNING_PIDS | tr '\n' ' '))"
+        print_info "Останавливаем существующие экземпляры..."
+        for pid in $RUNNING_PIDS; do
+            kill -TERM $pid 2>/dev/null || true
+        done
+        sleep 2
+        print_success "Существующие экземпляры остановлены"
+    fi
+    
     print_info "Для остановки нажмите Ctrl+C"
+    print_info "Или используйте: ./scripts/stop.sh"
     
     uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude="venv/*" --reload-exclude="*.egg-info/*"
 }

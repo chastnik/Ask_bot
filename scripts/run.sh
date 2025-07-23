@@ -133,6 +133,73 @@ check_config() {
     fi
 }
 
+# Проверка и завершение запущенного бота
+check_running_bot() {
+    print_info "Проверяем запущенные экземпляры Ask Bot..."
+    
+    # Проверяем процессы uvicorn с нашим приложением
+    RUNNING_PIDS=$(ps aux | grep -E "uvicorn.*app\.main:app" | grep -v grep | awk '{print $2}')
+    
+    if [ ! -z "$RUNNING_PIDS" ]; then
+        print_warning "Найдены запущенные экземпляры Ask Bot (PID: $(echo $RUNNING_PIDS | tr '\n' ' '))"
+        echo -n "Завершить работу существующих экземпляров? (Y/n): "
+        read -r kill_existing
+        
+        if [[ ! $kill_existing =~ ^[Nn]$ ]]; then
+            print_info "Завершаем работу существующих экземпляров..."
+            for pid in $RUNNING_PIDS; do
+                print_info "Завершаем процесс $pid..."
+                kill -TERM $pid 2>/dev/null || true
+                sleep 2
+                
+                # Проверяем, завершился ли процесс
+                if kill -0 $pid 2>/dev/null; then
+                    print_warning "Процесс $pid не завершился, принудительно завершаем..."
+                    kill -KILL $pid 2>/dev/null || true
+                fi
+            done
+            print_success "Существующие экземпляры завершены"
+            sleep 1
+        else
+            print_error "Отменено. Завершите существующие экземпляры вручную или используйте другой порт"
+            exit 1
+        fi
+    fi
+    
+    # Проверяем занятость порта 8000
+    if command -v lsof &> /dev/null; then
+        PORT_PROCESS=$(lsof -ti :8000 2>/dev/null || true)
+        if [ ! -z "$PORT_PROCESS" ]; then
+            print_warning "Порт 8000 занят процессом $PORT_PROCESS"
+            echo -n "Завершить процесс на порту 8000? (Y/n): "
+            read -r kill_port
+            
+            if [[ ! $kill_port =~ ^[Nn]$ ]]; then
+                print_info "Завершаем процесс на порту 8000..."
+                kill -TERM $PORT_PROCESS 2>/dev/null || true
+                sleep 2
+                
+                if kill -0 $PORT_PROCESS 2>/dev/null; then
+                    kill -KILL $PORT_PROCESS 2>/dev/null || true
+                fi
+                print_success "Процесс на порту 8000 завершен"
+            else
+                print_error "Отменено. Порт 8000 занят"
+                exit 1
+            fi
+        fi
+    elif command -v netstat &> /dev/null; then
+        # Альтернативная проверка через netstat
+        PORT_CHECK=$(netstat -ln | grep ":8000 " || true)
+        if [ ! -z "$PORT_CHECK" ]; then
+            print_warning "Порт 8000 уже используется"
+            print_info "Проверьте: netstat -ln | grep :8000"
+        fi
+    fi
+    
+    print_success "Порт 8000 свободен для использования"
+}
+
 # Проверка внешних зависимостей
 check_external_deps() {
     print_info "Проверяем внешние зависимости..."
@@ -210,6 +277,7 @@ main() {
     check_config
     check_external_deps
     init_database
+    check_running_bot
     start_app
 }
 
