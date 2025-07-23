@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     mattermost_url: str = "https://your-mattermost.example.com"
     mattermost_token: str = "your-mattermost-bot-token"
     mattermost_bot_username: str = "askbot"
+    mattermost_team_id: str = "your-team-id"
+    mattermost_ssl_verify: bool = False
     
     # ==============================================
     # НАСТРОЙКИ JIRA
@@ -130,6 +132,21 @@ class Settings(BaseSettings):
     def chart_save_path(self) -> str:
         """Обратная совместимость для chart_save_path"""
         return self.charts_dir
+        
+    @property
+    def bot_name(self) -> str:
+        """Обратная совместимость для bot_name"""
+        return self.mattermost_bot_username
+        
+    @property
+    def chart_url_prefix(self) -> str:
+        """Обратная совместимость для chart_url_prefix"""
+        return f"http://{self.app_host}:{self.app_port}/charts/"
+        
+    @property
+    def max_context_length(self) -> int:
+        """Обратная совместимость для max_context_length"""
+        return 4000
 
 
 # Глобальный экземпляр настроек

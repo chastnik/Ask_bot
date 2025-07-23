@@ -38,8 +38,8 @@ class ChartService:
             "default": px.colors.qualitative.Set3,
             "professional": ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", 
                            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"],
-            "warm": px.colors.qualitative.Warm,
-            "cool": px.colors.qualitative.Cool,
+            "warm": px.colors.qualitative.Pastel,
+            "cool": px.colors.qualitative.Set2,
             "jira": ["#0052CC", "#36B37E", "#FFAB00", "#FF5630", "#6554C0"]
         }
     

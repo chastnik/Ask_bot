@@ -6,7 +6,7 @@ import hashlib
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
-import aioredis
+import redis.asyncio as redis
 from loguru import logger
 
 from app.config import settings
@@ -29,7 +29,7 @@ class CacheService:
     async def __aenter__(self):
         """Async context manager entry"""
         try:
-            self.redis = aioredis.from_url(
+            self.redis = redis.from_url(
                 self.redis_url,
                 encoding="utf-8",
                 decode_responses=True

@@ -20,9 +20,9 @@ class BaseSchema(BaseModel):
 # Пользователь
 class UserBase(BaseSchema):
     username: str = Field(..., min_length=1, max_length=50)
-    email: Optional[str] = Field(None, regex=r'^[^@]+@[^@]+\.[^@]+$')
+    email: Optional[str] = Field(None, pattern=r'^[^@]+@[^@]+\.[^@]+$')
     display_name: Optional[str] = Field(None, max_length=100)
-    preferred_language: str = Field(default="ru", regex=r'^(ru|en)$')
+    preferred_language: str = Field(default="ru", pattern=r'^(ru|en)$')
     timezone: str = Field(default="UTC", max_length=50)
 
 
@@ -35,12 +35,12 @@ class UserCreate(UserBase):
 
 class UserUpdate(BaseSchema):
     username: Optional[str] = Field(None, min_length=1, max_length=50)
-    email: Optional[str] = Field(None, regex=r'^[^@]+@[^@]+\.[^@]+$')
+    email: Optional[str] = Field(None, pattern=r'^[^@]+@[^@]+\.[^@]+$')
     display_name: Optional[str] = Field(None, max_length=100)
     jira_username: Optional[str] = None
     jira_password: Optional[str] = None
     jira_token: Optional[str] = None
-    preferred_language: Optional[str] = Field(None, regex=r'^(ru|en)$')
+    preferred_language: Optional[str] = Field(None, pattern=r'^(ru|en)$')
     timezone: Optional[str] = Field(None, max_length=50)
 
 
@@ -112,7 +112,7 @@ class QueryTemplateBase(BaseSchema):
     description: Optional[str] = None
     template: str = Field(..., min_length=1)
     category: str = Field(..., min_length=1, max_length=50)
-    chart_type: Optional[str] = Field(None, regex=r'^(bar|line|pie|table|scatter)$')
+    chart_type: Optional[str] = Field(None, pattern=r'^(bar|line|pie|table|scatter)$')
 
 
 class QueryTemplateCreate(QueryTemplateBase):
@@ -128,7 +128,7 @@ class QueryTemplateUpdate(BaseSchema):
     category: Optional[str] = Field(None, min_length=1, max_length=50)
     parameters: Optional[List[str]] = None
     examples: Optional[List[str]] = None
-    chart_type: Optional[str] = Field(None, regex=r'^(bar|line|pie|table|scatter)$')
+    chart_type: Optional[str] = Field(None, pattern=r'^(bar|line|pie|table|scatter)$')
     chart_config: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
 
@@ -199,7 +199,7 @@ class SlashCommandRequest(BaseSchema):
 
 class SlashCommandResponse(BaseSchema):
     """Схема ответа на slash команду"""
-    response_type: str = Field(default="ephemera", regex=r'^(ephemeral|in_channel)$')
+    response_type: str = Field(default="ephemera", pattern=r'^(ephemeral|in_channel)$')
     text: str
     username: Optional[str] = None
     icon_url: Optional[str] = None
@@ -285,7 +285,7 @@ class QueryResult(BaseSchema):
 # Аналитика и графики
 class ChartRequest(BaseSchema):
     """Запрос на создание графика"""
-    chart_type: str = Field(..., regex=r'^(bar|line|pie|table|scatter)$')
+    chart_type: str = Field(..., pattern=r'^(bar|line|pie|table|scatter)$')
     data: List[Dict[str, Any]]
     title: str
     x_axis: str
@@ -323,7 +323,7 @@ class DocumentBase(BaseSchema):
     """Базовая схема документа"""
     title: str = Field(..., min_length=1, max_length=200)
     content: str = Field(..., min_length=1)
-    content_type: str = Field(..., regex=r'^(jql|faq|guide)$')
+    content_type: str = Field(..., pattern=r'^(jql|faq|guide)$')
     category: Optional[str] = None
     tags: Optional[List[str]] = None
 
@@ -335,7 +335,7 @@ class DocumentCreate(DocumentBase):
 class DocumentUpdate(BaseSchema):
     title: Optional[str] = Field(None, min_length=1, max_length=200)
     content: Optional[str] = Field(None, min_length=1)
-    content_type: Optional[str] = Field(None, regex=r'^(jql|faq|guide)$')
+    content_type: Optional[str] = Field(None, pattern=r'^(jql|faq|guide)$')
     category: Optional[str] = None
     tags: Optional[List[str]] = None
     is_active: Optional[bool] = None
