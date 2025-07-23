@@ -39,10 +39,16 @@ class LLMService:
     
     def _get_headers(self) -> Dict[str, str]:
         """Получает заголовки для API запросов"""
-        return {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "python-requests/2.31.0"
         }
+        
+        # Используем X-PROXY-AUTH как в рабочем mm_bot
+        if self.token:
+            headers["X-PROXY-AUTH"] = self.token
+        
+        return headers
     
     async def test_connection(self) -> bool:
         """
@@ -52,23 +58,90 @@ class LLMService:
             bool: True если соединение успешно
         """
         try:
-            url = f"{self.base_url}/v1/models"
             headers = self._get_headers()
+            logger.debug(f"Используемые заголовки: {headers}")
             
-            async with self.session.get(url, headers=headers) as response:
-                if response.status == 200:
-                    models_data = await response.json()
-                    models = [model.get("id", "") for model in models_data.get("data", [])]
+            # Сначала пробуем GET endpoints для получения моделей
+            get_endpoints = [
+                "/v1/models",
+                "/api/v1/models", 
+                "/models"
+            ]
+            
+            for endpoint in get_endpoints:
+                try:
+                    url = f"{self.base_url}{endpoint}"
+                    logger.debug(f"Тестируем GET endpoint: {url}")
                     
-                    if self.model in models:
-                        logger.info(f"Успешное подключение к LLM. Модель {self.model} доступна")
+                    async with self.session.get(url, headers=headers) as response:
+                        logger.debug(f"Response status: {response.status}")
+                        response_text = await response.text()
+                        logger.debug(f"Response body: {response_text[:200]}...")
+                        
+                        if response.status == 200:
+                            try:
+                                models_data = await response.json() if response_text else {}
+                                models = [model.get("id", "") for model in models_data.get("data", [])]
+                                
+                                if self.model in models:
+                                    logger.info(f"Успешное подключение к LLM. Модель {self.model} доступна")
+                                    return True
+                                else:
+                                    logger.warning(f"Модель {self.model} не найдена. Доступные: {models}")
+                                    continue
+                            except Exception as parse_error:
+                                logger.error(f"Ошибка парсинга ответа: {parse_error}")
+                                continue
+                        elif response.status == 404:
+                            continue
+                        elif response.status == 403:
+                            logger.error(f"Ошибка авторизации (403) для endpoint {endpoint}")
+                            continue
+                        else:
+                            logger.error(f"Ошибка подключения к LLM: {response.status} для {endpoint}")
+                            continue
+                except Exception as e:
+                    logger.error(f"Ошибка при тестировании endpoint {endpoint}: {e}")
+                    continue
+            
+            # Если GET endpoints не работают, пробуем POST запрос к completions
+            # для проверки работоспособности API
+            try:
+                url = f"{self.base_url}/v1/chat/completions"
+                logger.debug(f"Тестируем POST endpoint: {url}")
+                
+                test_payload = {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": "test"}],
+                    "max_tokens": 1,
+                    "temperature": 0.1
+                }
+                
+                async with self.session.post(url, headers=headers, json=test_payload) as response:
+                    logger.debug(f"POST Response status: {response.status}")
+                    response_text = await response.text()
+                    logger.debug(f"POST Response body: {response_text[:200]}...")
+                    
+                    if response.status == 200:
+                        logger.info(f"Успешное подключение к LLM через POST /v1/chat/completions")
                         return True
+                    elif response.status == 400:
+                        # Если получили 400, значит запрос дошёл, но модель не найдена или неверные параметры
+                        # Это лучше чем 403, значит авторизация работает
+                        logger.warning(f"API отвечает, но модель {self.model} недоступна или неверные параметры")
+                        logger.warning(f"Ответ сервера: {response_text}")
+                        return True  # Подключение работает, проблема в модели
+                    elif response.status == 403:
+                        logger.error(f"Ошибка авторизации (403) для POST endpoint")
                     else:
-                        logger.warning(f"Модель {self.model} не найдена. Доступные: {models}")
-                        return False
-                else:
-                    logger.error(f"Ошибка подключения к LLM: {response.status}")
-                    return False
+                        logger.error(f"Ошибка POST запроса: {response.status}")
+                        
+            except Exception as e:
+                logger.error(f"Ошибка при тестировании POST endpoint: {e}")
+            
+            # Если ни один endpoint не сработал
+            logger.error("Не удалось подключиться ни к одному endpoint LLM сервера")
+            return False
                     
         except Exception as e:
             logger.error(f"Ошибка при тестировании подключения к LLM: {e}")

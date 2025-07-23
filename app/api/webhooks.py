@@ -15,6 +15,7 @@ from app.services.mattermost_service import mattermost_service
 from app.services.llm_service import llm_service
 from app.services.cache_service import cache_service
 from app.services.chart_service import chart_service
+from app.services.dm_handler import dm_handler
 
 
 router = APIRouter()
@@ -26,52 +27,9 @@ class BotLogic:
     @staticmethod
     async def process_direct_message(user_query: str, user_id: str, user_name: str, channel_id: str) -> Dict[str, Any]:
         """
-        Обрабатывает личное сообщение пользователя
-        
-        Args:
-            user_query: Сообщение пользователя
-            user_id: ID пользователя Mattermost
-            user_name: Имя пользователя
-            channel_id: ID канала (для личных сообщений)
-            
-        Returns:
-            Ответ для отправки в личные сообщения
+        Обрабатывает личное сообщение через DM handler
         """
-        start_time = time.time()
-        
-        try:
-            # Проверяем специальные команды
-            query_lower = user_query.strip().lower()
-            
-            # Команда помощи
-            if query_lower in ['помощь', 'help', 'что ты умеешь', 'команды']:
-                return await BotLogic._handle_help_dm()
-            
-            # Команда авторизации
-            if query_lower.startswith('авторизация') or query_lower.startswith('auth'):
-                return await BotLogic._handle_auth_dm(user_query, user_id)
-            
-            # Команда статуса
-            if query_lower in ['статус', 'status', 'мой статус']:
-                return await BotLogic._handle_status_dm(user_id)
-            
-            # Команда проекты
-            if query_lower in ['проекты', 'projects', 'мои проекты']:
-                return await BotLogic._handle_projects_dm(user_id)
-            
-            # Команды кеша
-            if query_lower.startswith('кеш') or query_lower.startswith('cache'):
-                return await BotLogic._handle_cache_dm(query_lower, user_id)
-                
-            # Обычный запрос - обрабатываем через LLM и Jira
-            return await BotLogic._process_jira_query_dm(user_query, user_id, user_name, channel_id)
-            
-        except Exception as e:
-            logger.error(f"Ошибка обработки личного сообщения от {user_name}: {e}")
-            return {
-                "text": f"❌ Произошла ошибка при обработке запроса: {str(e)}",
-                "response_type": "ephemeral"
-            }
+        return await dm_handler.process_message(user_query, user_id, user_name, channel_id)
     
     @staticmethod
     async def process_user_query(user_query: str, user_id: str, channel_id: str) -> SlashCommandResponse:

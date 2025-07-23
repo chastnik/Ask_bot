@@ -293,7 +293,7 @@ async def general_exception_handler(request, exc):
         status_code=500,
         content=ErrorResponse(
             error="Внутренняя ошибка сервера",
-            detail=str(exc) if settings.debug else None,
+            detail=str(exc) if settings.app_mode == "development" else None,
             code="500",
             timestamp=datetime.now()
         ).dict()
@@ -308,6 +308,6 @@ if __name__ == "__main__":
         "app.main:app",
         host=settings.host,
         port=settings.port,
-        reload=settings.debug,
+        reload=settings.app_mode == "development",
         log_level=settings.log_level.lower()
     ) 
