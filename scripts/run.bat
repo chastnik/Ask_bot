@@ -76,13 +76,14 @@ echo ✅ Виртуальное окружение активировано
 REM Установка зависимостей
 echo ℹ️  Проверяем и устанавливаем зависимости...
 
-REM Обновляем pip
-echo ℹ️  Обновляем pip...
-python -m pip install --upgrade pip >nul 2>&1
-
-REM Устанавливаем базовые пакеты для сборки (важно для Python 3.13+)
-echo ℹ️  Устанавливаем базовые пакеты для сборки...
-pip install --upgrade setuptools wheel >nul 2>&1
+REM Обновляем pip и устанавливаем базовые пакеты (критично для Python 3.13+)
+echo ℹ️  Обновляем pip и базовые пакеты для Python 3.13+...
+python -m pip install --upgrade pip "setuptools>=70.0.0" "wheel>=0.42.0"
+if %errorlevel% neq 0 (
+    echo ❌ Ошибка установки базовых пакетов
+    pause
+    exit /b 1
+)
 
 REM Устанавливаем зависимости
 if exist "requirements.txt" (

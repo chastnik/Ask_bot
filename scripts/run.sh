@@ -83,13 +83,15 @@ setup_venv() {
 install_dependencies() {
     print_info "Проверяем и устанавливаем зависимости..."
     
-    # Обновляем pip
-    print_info "Обновляем pip..."
-    pip install --upgrade pip > /dev/null 2>&1
+    # Обновляем pip и устанавливаем базовые пакеты (критично для Python 3.13+)
+    print_info "Обновляем pip и базовые пакеты для Python 3.13+..."
+    pip install --upgrade pip setuptools>=70.0.0 wheel>=0.42.0
     
-    # Устанавливаем базовые пакеты для сборки (важно для Python 3.13+)
-    print_info "Устанавливаем базовые пакеты для сборки..."
-    pip install --upgrade setuptools wheel > /dev/null 2>&1
+    # Проверяем успешность установки
+    if [ $? -ne 0 ]; then
+        print_error "Ошибка установки базовых пакетов"
+        exit 1
+    fi
     
     # Устанавливаем зависимости
     if [ -f "requirements.txt" ]; then
