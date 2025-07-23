@@ -264,11 +264,12 @@ start_app() {
         else
             # Режим разработки с оптимизированным reload
             print_info "Запуск в режиме разработки с автоперезагрузкой..."
-            if [ -f "uvicorn.json" ]; then
+            if [ -f "uvicorn.json" ] && [ -s "uvicorn.json" ]; then
                 print_info "Используем конфигурацию из uvicorn.json"
                 uvicorn --config uvicorn.json
             else
                 # Fallback к параметрам командной строки
+                print_info "Используем оптимизированные параметры CLI"
                 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \
                     --reload-dir="app" \
                     --reload-exclude="venv/**/*" \
