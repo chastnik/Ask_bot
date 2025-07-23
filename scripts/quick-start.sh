@@ -143,7 +143,19 @@ EOF
     print_info "Для остановки нажмите Ctrl+C"
     print_info "Или используйте: ./scripts/stop.sh"
     
-    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude="venv/*" --reload-exclude="*.egg-info/*"
+    # Используем оптимизированную конфигурацию reload
+    if [ -f "uvicorn.json" ]; then
+        print_info "Используем конфигурацию из uvicorn.json для оптимального reload"
+        uvicorn --config uvicorn.json
+    else
+        # Fallback к параметрам с ограниченным наблюдением
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \
+            --reload-dir="app" \
+            --reload-exclude="venv/**/*" \
+            --reload-exclude=".venv/**/*" \
+            --reload-exclude="*.egg-info/**/*" \
+            --reload-exclude="__pycache__/**/*"
+    fi
 }
 
 # Проверяем, что мы в правильной директории

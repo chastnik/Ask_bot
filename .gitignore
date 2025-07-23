@@ -131,6 +131,9 @@ charts/
 *.jpeg
 *.svg
 
+# Uvicorn конфигурация (пользователь может настроить свою)
+uvicorn.json
+
 # IDE
 .vscode/
 .idea/

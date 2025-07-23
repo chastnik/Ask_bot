@@ -252,9 +252,31 @@ start_app() {
     print_info "Для остановки нажмите Ctrl+C"
     echo
     
-    # Запускаем с автоперезагрузкой в режиме разработки
+    # Выбираем режим запуска
+    echo -n "Запустить в режиме разработки с автоперезагрузкой? (Y/n): "
+    read -r dev_mode
+    
     if command -v uvicorn &> /dev/null; then
-        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude="venv/*" --reload-exclude="*.egg-info/*"
+        if [[ $dev_mode =~ ^[Nn]$ ]]; then
+            # Продакшн режим без reload
+            print_info "Запуск в продакшн режиме без автоперезагрузки..."
+            uvicorn app.main:app --host 0.0.0.0 --port 8000
+        else
+            # Режим разработки с оптимизированным reload
+            print_info "Запуск в режиме разработки с автоперезагрузкой..."
+            if [ -f "uvicorn.json" ]; then
+                print_info "Используем конфигурацию из uvicorn.json"
+                uvicorn --config uvicorn.json
+            else
+                # Fallback к параметрам командной строки
+                uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \
+                    --reload-dir="app" \
+                    --reload-exclude="venv/**/*" \
+                    --reload-exclude=".venv/**/*" \
+                    --reload-exclude="*.egg-info/**/*" \
+                    --reload-exclude="__pycache__/**/*"
+            fi
+        fi
     else
         print_error "uvicorn не найден! Установите его: pip install uvicorn"
         exit 1

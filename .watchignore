@@ -1,13 +1,69 @@
-# Исключаем из наблюдения за изменениями файлов
+# Исключаем из наблюдения за изменениями файлов (watchfiles)
+# Виртуальные окружения
 venv/
 .venv/
-venv/*
-.venv/*
-*.egg-info/
+venv/**/*
+.venv/**/*
+env/
+.env/
+
+# Python кеш и артефакты
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+
+# Системные файлы
 .git/
-.pytest_cache/
+.gitignore
+.DS_Store
+Thumbs.db
+
+# Логи и базы данных
 *.log
 *.db
+*.sqlite
+*.sqlite3
+
+# Папки приложения
 charts/
-logs/ 
+logs/
+tmp/
+temp/
+
+# IDE файлы
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Тестирование
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache
+nosetests.xml
+coverage.xml
+pytest.xml
+
+# Документация
+docs/_build/ 
