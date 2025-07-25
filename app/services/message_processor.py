@@ -11,7 +11,10 @@ from app.services.llm_service import llm_service
 from app.services.cache_service import cache_service
 from app.services.mattermost_service import mattermost_service
 from app.services.chart_service import chart_service
+from app.services.conversation_service import get_conversation_service
 from app.config import settings
+from app.models.database import engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class MessageProcessor:
@@ -50,6 +53,34 @@ class MessageProcessor:
         jira_base_url = settings.jira_base_url.rstrip('/')
         issue_link = f"{jira_base_url}/browse/{issue_key}"
         return f"[**{issue_key}**]({issue_link})"
+    
+    async def _enrich_query_with_context(self, user_id: str, query: str, channel_id: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
+        """Обогащает запрос контекстом предыдущих сообщений"""
+        try:
+            async with AsyncSession(engine) as db_session:
+                conv_service = await get_conversation_service(db_session)
+                return await conv_service.enrich_query_with_context(user_id, query, channel_id)
+        except Exception as e:
+            logger.error(f"Ошибка обогащения контекста: {e}")
+            return query, {}
+    
+    async def _save_conversation_context(
+        self, 
+        user_id: str, 
+        query: str, 
+        intent: Dict[str, Any], 
+        response: str,
+        entities: Optional[Dict[str, Any]] = None,
+        channel_id: Optional[str] = None
+    ) -> bool:
+        """Сохраняет контекст беседы"""
+        try:
+            async with AsyncSession(engine) as db_session:
+                conv_service = await get_conversation_service(db_session)
+                return await conv_service.save_context(user_id, query, intent, response, entities, channel_id)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения контекста: {e}")
+            return False
     
     async def process_message(self, user_id: str, message: str) -> str:
         """
@@ -298,6 +329,12 @@ class MessageProcessor:
     async def _handle_jira_query(self, user_id: str, query: str) -> tuple[str, Optional[str]]:
         """Обработка запроса к Jira"""
         try:
+            # Обогащаем запрос контекстом предыдущих сообщений
+            enriched_query, context_entities = await self._enrich_query_with_context(user_id, query)
+            logger.info(f"Исходный запрос: {query}")
+            logger.info(f"Обогащенный запрос: {enriched_query}")
+            logger.info(f"Контекстные сущности: {context_entities}")
+            
             # Получаем учетные данные пользователя из кеша
             async with cache_service as cache:
                 credentials = await cache.get_cached_user_credentials(user_id)
@@ -312,16 +349,29 @@ class MessageProcessor:
 Пример: `авторизация user@company.com mytoken`
 """, None
 
-            # Анализируем запрос с помощью LLM
+            # Анализируем запрос с помощью LLM (используем обогащенный запрос)
             try:
                 async with llm_service as llm:
-                    intent = await llm.interpret_query_intent(query)
+                    intent = await llm.interpret_query_intent(enriched_query)
+                
+                # Дополняем intent контекстными сущностями
+                if context_entities:
+                    if "parameters" not in intent:
+                        intent["parameters"] = {}
+                    intent["parameters"].update(context_entities)
+                
                 logger.info(f"Определен intent: {intent}")
             except Exception as e:
                 logger.warning(f"Ошибка анализа intent: {e}")
                 # Используем простой анализ намерений как fallback
                 async with llm_service as llm:
-                    intent = llm._simple_intent_analysis(query)
+                    intent = llm._simple_intent_analysis(enriched_query)
+                    
+                # Дополняем intent контекстными сущностями для fallback тоже
+                if context_entities:
+                    if "parameters" not in intent:
+                        intent["parameters"] = {}
+                    intent["parameters"].update(context_entities)
 
             # Загружаем маппинги и справочники Jira из кеша
             try:
@@ -352,28 +402,61 @@ class MessageProcessor:
                     logger.warning(f"user_mappings не словарь: {type(user_mappings)}, заменяем на пустой словарь")
                     user_mappings = {}
                     
-                user_context = {
-                    "projects": jira_dictionaries.get("projects", []), 
-                    "clients": list(client_mappings.keys()),
-                    "users": list(user_mappings.keys()),
-                    "client_mappings": client_mappings,
-                    "user_mappings": user_mappings,
-                    "jira_dictionaries": jira_dictionaries
-                }
+                # Проверяем тип намерения
+                intent_type = intent.get("intent", "search")
                 
-                async with llm_service as llm:
-                    jql = await llm.generate_jql_query(query, user_context)
-                logger.info(f"Сгенерирован JQL: {jql}")
+                # Для worklog запросов используем специальную обработку
+                if intent_type == "worklog":
+                    logger.info(f"Обрабатываем worklog запрос: {intent}")
+                    
+                    # Извлекаем assignee из параметров intent
+                    assignee = intent.get("parameters", {}).get("assignee")
+                    if not assignee:
+                        return "❌ Не удалось определить пользователя для подсчета трудозатрат.", None
+                    
+                    # Генерируем JQL для поиска задач пользователя
+                    jql = f"assignee = \"{assignee}\" OR assignee was \"{assignee}\""
+                    
+                    # Добавляем временной фильтр если указан
+                    time_period = intent.get("parameters", {}).get("time_period")
+                    if time_period:
+                        # Простое определение месяца для JQL
+                        month_mapping = {
+                            "январь": "01", "февраль": "02", "март": "03", "апрель": "04",
+                            "май": "05", "июнь": "06", "июль": "07", "август": "08",
+                            "сентябрь": "09", "октябрь": "10", "ноябрь": "11", "декабрь": "12"
+                        }
+                        
+                        current_year = "2024"  # Можно сделать динамическим
+                        for month_ru, month_num in month_mapping.items():
+                            if month_ru in time_period.lower():
+                                jql += f" AND worklogDate >= \"{current_year}-{month_num}-01\" AND worklogDate <= \"{current_year}-{month_num}-31\""
+                                break
                 
-                # Проверяем, нужно ли уточнить маппинг
-                if jql and jql.startswith("UNKNOWN_CLIENT:"):
-                    client_name = jql.replace("UNKNOWN_CLIENT:", "")
-                    response = await self._ask_for_client_mapping(user_id, client_name)
-                    return response, None
-                elif jql and jql.startswith("UNKNOWN_USER:"):
-                    user_name = jql.replace("UNKNOWN_USER:", "")
-                    response = await self._resolve_user_mapping(user_id, user_name, query)
-                    return response, None
+                else:
+                    # Для обычных запросов используем генерацию JQL через LLM
+                    user_context = {
+                        "projects": jira_dictionaries.get("projects", []), 
+                        "clients": list(client_mappings.keys()),
+                        "users": list(user_mappings.keys()),
+                        "client_mappings": client_mappings,
+                        "user_mappings": user_mappings,
+                        "jira_dictionaries": jira_dictionaries
+                    }
+                    
+                    async with llm_service as llm:
+                        jql = await llm.generate_jql_query(query, user_context)
+                    logger.info(f"Сгенерирован JQL: {jql}")
+                    
+                    # Проверяем, нужно ли уточнить маппинг
+                    if jql and jql.startswith("UNKNOWN_CLIENT:"):
+                        client_name = jql.replace("UNKNOWN_CLIENT:", "")
+                        response = await self._ask_for_client_mapping(user_id, client_name)
+                        return response, None
+                    elif jql and jql.startswith("UNKNOWN_USER:"):
+                        user_name = jql.replace("UNKNOWN_USER:", "")
+                        response = await self._resolve_user_mapping(user_id, user_name, query)
+                        return response, None
                     
             except Exception as e:
                 logger.error(f"Ошибка генерации JQL: {e}")
@@ -488,6 +571,18 @@ class MessageProcessor:
                 if issues.total > 10:
                     response_text += f"... и еще {issues.total - 10} задач(и)"
 
+            # Сохраняем контекст беседы
+            try:
+                await self._save_conversation_context(
+                    user_id=user_id,
+                    query=query,
+                    intent=intent,
+                    response=response_text,
+                    entities=intent.get("parameters", {})
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось сохранить контекст беседы: {e}")
+            
             # Возвращаем текст и путь к файлу графика
             return response_text, chart_file_path
                 

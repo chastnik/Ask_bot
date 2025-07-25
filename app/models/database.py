@@ -235,4 +235,36 @@ class KnowledgeBase(Base):
     )
     
     def __repr__(self):
-        return f"<KnowledgeBase(id={self.id}, title={self.title[:50]}...)>" 
+        return f"<KnowledgeBase(id={self.id}, title={self.title[:50]}...)>"
+
+
+class ConversationContext(Base):
+    """Модель контекста беседы для запоминания предыдущих вопросов и уточнений"""
+    __tablename__ = "conversation_contexts"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    channel_id = Column(String, nullable=True)  # ID канала/чата
+    
+    # Контекст последнего запроса
+    last_query = Column(Text, nullable=False)  # Последний запрос пользователя
+    last_intent = Column(JSON, nullable=True)  # Анализ намерений последнего запроса
+    last_response = Column(Text, nullable=True)  # Последний ответ бота
+    
+    # Извлеченные сущности и контекст
+    entities = Column(JSON, nullable=True)  # Извлеченные сущности (assignee, time_period, project и т.д.)
+    clarifications = Column(JSON, nullable=True)  # История уточнений от пользователя
+    
+    # Метаданные
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    # Индексы для быстрого поиска
+    __table_args__ = (
+        Index('idx_context_user_channel', 'user_id', 'channel_id'),
+        Index('idx_context_updated', 'updated_at'),
+        UniqueConstraint('user_id', 'channel_id', name='uq_user_channel_context'),
+    )
+    
+    def __repr__(self):
+        return f"<ConversationContext(id={self.id}, user_id={self.user_id}, last_query={self.last_query[:50]}...)>" 

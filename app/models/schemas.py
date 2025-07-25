@@ -397,4 +397,37 @@ class ErrorResponse(BaseSchema):
     error: str
     detail: Optional[str] = None
     code: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.now) 
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+# Контекст беседы
+class ConversationContextBase(BaseSchema):
+    """Базовая схема контекста беседы"""
+    user_id: str = Field(..., min_length=1, max_length=50)
+    channel_id: Optional[str] = Field(None, max_length=100)
+    last_query: str = Field(..., max_length=2000)
+    last_intent: Dict[str, Any] = Field(default_factory=dict)
+    last_response: Optional[str] = Field(None, max_length=5000)
+    entities: Dict[str, Any] = Field(default_factory=dict)  # Извлеченные сущности
+    clarifications: List[Dict[str, Any]] = Field(default_factory=list)  # История уточнений
+
+
+class ConversationContextCreate(ConversationContextBase):
+    """Схема создания контекста беседы"""
+    pass
+
+
+class ConversationContextUpdate(BaseSchema):
+    """Схема обновления контекста беседы"""
+    last_query: Optional[str] = Field(None, max_length=2000)
+    last_intent: Optional[Dict[str, Any]] = None
+    last_response: Optional[str] = Field(None, max_length=5000)
+    entities: Optional[Dict[str, Any]] = None
+    clarifications: Optional[List[Dict[str, Any]]] = None
+
+
+class ConversationContext(ConversationContextBase):
+    """Полная схема контекста беседы"""
+    id: int
+    created_at: datetime
+    updated_at: datetime 
