@@ -396,6 +396,270 @@ class CacheService:
         except Exception as e:
             logger.error(f"Ошибка инвалидации кеша пользователя {user_id}: {e}")
             return False
+
+    # === RAG система для маппингов ===
+    
+    async def save_client_project_mapping(self, client_name: str, project_key: str, 
+                                        user_id: str = "global") -> bool:
+        """
+        Сохраняет соответствие клиент → проект
+        
+        Args:
+            client_name: Название клиента
+            project_key: Ключ проекта в Jira
+            user_id: ID пользователя, который научил боту (или "global")
+            
+        Returns:
+            True при успехе
+        """
+        try:
+            mapping_key = f"mapping:client:{client_name.lower()}"
+            mapping_data = {
+                "client_name": client_name,
+                "project_key": project_key,
+                "learned_by": user_id,
+                "learned_at": datetime.now().isoformat()
+            }
+            
+            # Долговременное хранение (30 дней)
+            return await self.set(mapping_key, mapping_data, ttl=30*24*3600)
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения маппинга клиент→проект: {e}")
+            return False
+    
+    async def get_project_by_client(self, client_name: str) -> Optional[str]:
+        """
+        Получает ключ проекта по названию клиента
+        
+        Args:
+            client_name: Название клиента
+            
+        Returns:
+            Ключ проекта или None
+        """
+        try:
+            mapping_key = f"mapping:client:{client_name.lower()}"
+            mapping_data = await self.get(mapping_key)
+            
+            if mapping_data and isinstance(mapping_data, dict):
+                return mapping_data.get("project_key")
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения маппинга для клиента {client_name}: {e}")
+            return None
+    
+    async def save_user_username_mapping(self, display_name: str, username: str,
+                                       user_id: str = "global") -> bool:
+        """
+        Сохраняет соответствие отображаемое имя → username в Jira
+        
+        Args:
+            display_name: Отображаемое имя (например, "Станислав Чашин")
+            username: Username в Jira (например, "svchashin")
+            user_id: ID пользователя, который научил боту
+            
+        Returns:
+            True при успехе
+        """
+        try:
+            mapping_key = f"mapping:user:{display_name.lower()}"
+            mapping_data = {
+                "display_name": display_name,
+                "username": username,
+                "learned_by": user_id,
+                "learned_at": datetime.now().isoformat()
+            }
+            
+            # Долговременное хранение (30 дней)
+            return await self.set(mapping_key, mapping_data, ttl=30*24*3600)
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения маппинга пользователь→username: {e}")
+            return False
+    
+    async def get_username_by_display_name(self, display_name: str) -> Optional[str]:
+        """
+        Получает username по отображаемому имени
+        
+        Args:
+            display_name: Отображаемое имя
+            
+        Returns:
+            Username или None
+        """
+        try:
+            mapping_key = f"mapping:user:{display_name.lower()}"
+            mapping_data = await self.get(mapping_key)
+            
+            if mapping_data and isinstance(mapping_data, dict):
+                return mapping_data.get("username")
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения username для {display_name}: {e}")
+            return None
+    
+    async def get_all_client_mappings(self) -> Dict[str, str]:
+        """
+        Получает все известные маппинги клиент → проект
+        
+        Returns:
+            Словарь {client_name: project_key}
+        """
+        try:
+            if not self.redis:
+                return {}
+                
+            pattern = self._make_key("mapping:client:*")
+            keys = await self.redis.keys(pattern)
+            
+            mappings = {}
+            for key in keys:
+                data = await self.redis.get(key)
+                if data:
+                    try:
+                        mapping_data = json.loads(data)
+                        client_name = mapping_data.get("client_name")
+                        project_key = mapping_data.get("project_key")
+                        if client_name and project_key:
+                            mappings[client_name] = project_key
+                    except json.JSONDecodeError:
+                        continue
+            
+            return mappings
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения всех маппингов клиентов: {e}")
+            return {}
+    
+    # === Кэширование справочников Jira ===
+    
+    async def cache_jira_dictionary(self, dict_type: str, data: List[Dict[str, Any]], 
+                                   user_id: str) -> bool:
+        """
+        Кэширует справочник Jira
+        
+        Args:
+            dict_type: Тип справочника (statuses, issue_types, priorities, projects)
+            data: Данные справочника
+            user_id: ID пользователя (для привязки к его учетным данным)
+        """
+        try:
+            cache_key = f"jira_dict:{dict_type}:{user_id}"
+            cache_data = {
+                "data": data,
+                "cached_at": datetime.now().isoformat(),
+                "user_id": user_id
+            }
+            
+            # Кэшируем на 1 час (справочники меняются редко)
+            return await self.set(cache_key, cache_data, ttl=3600)
+            
+        except Exception as e:
+            logger.error(f"Ошибка кэширования справочника {dict_type}: {e}")
+            return False
+    
+    async def get_jira_dictionary(self, dict_type: str, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Получает кэшированный справочник Jира
+        
+        Args:
+            dict_type: Тип справочника
+            user_id: ID пользователя
+            
+        Returns:
+            Список элементов справочника или пустой список
+        """
+        try:
+            cache_key = f"jira_dict:{dict_type}:{user_id}"
+            cache_data = await self.get(cache_key)
+            
+            if cache_data and isinstance(cache_data, dict):
+                return cache_data.get("data", [])
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения справочника {dict_type}: {e}")
+            return []
+    
+    async def get_all_jira_dictionaries(self, user_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Получает все кэшированные справочники Jira для пользователя
+        
+        Returns:
+            Словарь со всеми справочниками
+        """
+        try:
+            dict_types = ["projects", "statuses", "issue_types", "priorities"]
+            dictionaries = {}
+            
+            for dict_type in dict_types:
+                dictionaries[dict_type] = await self.get_jira_dictionary(dict_type, user_id)
+            
+            return dictionaries
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения всех справочников: {e}")
+            return {}
+    
+    async def invalidate_jira_dictionaries(self, user_id: str) -> bool:
+        """
+        Инвалидирует все справочники Jira для пользователя
+        """
+        try:
+            if not self.redis:
+                return False
+                
+            pattern = self._make_key(f"jira_dict:*:{user_id}")
+            keys = await self.redis.keys(pattern)
+            
+            if keys:
+                await self.redis.delete(*keys)
+                logger.info(f"Справочники Jira инвалидированы для пользователя {user_id}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка инвалидации справочников: {e}")
+            return False
+    
+    async def get_all_user_mappings(self) -> Dict[str, str]:
+        """
+        Получает все известные маппинги имя → username
+        
+        Returns:
+            Словарь {display_name: username}
+        """
+        try:
+            if not self.redis:
+                return {}
+                
+            pattern = self._make_key("mapping:user:*")
+            keys = await self.redis.keys(pattern)
+            
+            mappings = {}
+            for key in keys:
+                data = await self.redis.get(key)
+                if data:
+                    try:
+                        mapping_data = json.loads(data)
+                        display_name = mapping_data.get("display_name")
+                        username = mapping_data.get("username")
+                        if display_name and username:
+                            mappings[display_name] = username
+                    except json.JSONDecodeError:
+                        continue
+            
+            return mappings
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения всех маппингов пользователей: {e}")
+            return {}
     
     async def get_cache_stats(self) -> Dict[str, Any]:
         """

@@ -1,5 +1,6 @@
 """
-Основное FastAPI приложение
+Основное FastAPI приложение Ask Bot
+Теперь работает только с личными сообщениями через WebSocket
 """
 import os
 import asyncio
@@ -14,16 +15,14 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from app.config import settings
-from app.models.schemas import (
-    SlashCommandRequest, SlashCommandResponse, 
-    HealthCheck, ErrorResponse
-)
+from app.models.schemas import HealthCheck, ErrorResponse
 from app.services.jira_service import jira_service
 from app.services.mattermost_service import mattermost_service
 from app.services.llm_service import llm_service
 from app.services.cache_service import cache_service
 from app.services.chart_service import chart_service
-from app.api.webhooks import router as webhooks_router
+from app.services.websocket_client import websocket_client
+from app.services.message_processor import message_processor
 
 
 # Настройка логирования
@@ -38,6 +37,64 @@ logger.add(
 # Создаем директории
 os.makedirs("logs", exist_ok=True)
 os.makedirs(settings.chart_save_path, exist_ok=True)
+
+
+async def handle_websocket_message(message_info: Dict[str, Any]):
+    """
+    Обработчик сообщений от WebSocket клиента
+    """
+    try:
+        user_id = message_info["user_id"]
+        message_text = message_info["message"]
+        
+        logger.info(f"📥 Обработка сообщения от {user_id}: {message_text}")
+        
+        # Обрабатываем сообщение через процессор
+        response = await message_processor.process_message(user_id, message_text)
+        
+        if response:
+            # Отправляем ответ пользователю
+            async with mattermost_service as mm:
+                success = await mm.send_direct_message(user_id, response)
+                
+            if success:
+                logger.info(f"📤 Ответ отправлен пользователю {user_id}")
+            else:
+                logger.error(f"❌ Не удалось отправить ответ пользователю {user_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки WebSocket сообщения: {e}")
+        
+        # Пытаемся отправить сообщение об ошибке
+        try:
+            async with mattermost_service as mm:
+                await mm.send_direct_message(
+                    message_info["user_id"],
+                    f"❌ Произошла ошибка при обработке сообщения: {str(e)}"
+                )
+        except Exception as send_error:
+            logger.error(f"❌ Не удалось отправить сообщение об ошибке: {send_error}")
+
+
+async def start_websocket_client():
+    """Запускает WebSocket клиент в фоновом режиме"""
+    try:
+        # Устанавливаем обработчик сообщений
+        websocket_client.set_message_handler(handle_websocket_message)
+        
+        # Запускаем подключение
+        while True:
+            try:
+                logger.info("🔌 Запуск WebSocket клиента...")
+                await websocket_client.connect()
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка WebSocket: {e}")
+                logger.info("🔄 Переподключение через 10 секунд...")
+                await asyncio.sleep(10)
+                
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка WebSocket клиента: {e}")
 
 
 @asynccontextmanager
@@ -66,7 +123,11 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("⚠️ Проблемы с подключением к LLM")
         
+        # Запускаем WebSocket клиент в фоновой задаче
+        websocket_task = asyncio.create_task(start_websocket_client())
+        
         logger.info("🎉 Ask Bot успешно запущен!")
+        logger.info("💬 Бот готов к работе с личными сообщениями")
         
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации: {e}")
@@ -75,12 +136,19 @@ async def lifespan(app: FastAPI):
     
     # Завершение работы
     logger.info("🛑 Остановка Ask Bot...")
+    
+    # Закрываем WebSocket соединение
+    try:
+        websocket_task.cancel()
+        await websocket_client.disconnect()
+    except Exception as e:
+        logger.error(f"Ошибка закрытия WebSocket: {e}")
 
 
 # Создание FastAPI приложения
 app = FastAPI(
     title="Ask Bot",
-    description="Универсальный чат-бот для Jira с аналитикой и визуализацией",
+    description="Универсальный чат-бот для Jira с аналитикой и визуализацией (только личные сообщения)",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -97,17 +165,15 @@ app.add_middleware(
 # Статические файлы для графиков
 app.mount("/charts", StaticFiles(directory=settings.chart_save_path), name="charts")
 
-# Подключение роутеров
-app.include_router(webhooks_router, prefix="/webhooks", tags=["webhooks"])
-
 
 @app.get("/", response_model=Dict[str, str])
 async def root():
     """Корневой эндпоинт"""
     return {
-        "message": "Ask Bot API",
+        "message": "Ask Bot API (только личные сообщения)",
         "version": "1.0.0",
         "status": "running",
+        "mode": "direct_messages_only",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -122,6 +188,7 @@ async def health_check():
             "redis": False,
             "jira": False,
             "llm": False,
+            "websocket": websocket_client.is_connected,
             "timestamp": datetime.now()
         }
         
@@ -156,7 +223,7 @@ async def health_check():
         
         # Определяем общий статус
         if all([health_status["redis"], health_status.get("mattermost", False), 
-                health_status["jira"], health_status["llm"]]):
+                health_status["jira"], health_status["llm"], health_status["websocket"]]):
             health_status["status"] = "healthy"
         elif health_status["database"]:
             health_status["status"] = "degraded"
@@ -173,6 +240,7 @@ async def health_check():
             redis=False,
             jira=False,
             llm=False,
+            websocket=False,
             timestamp=datetime.now()
         )
 
@@ -202,6 +270,17 @@ async def clear_cache():
     except Exception as e:
         logger.error(f"Error clearing cache: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/websocket/status")
+async def websocket_status():
+    """Получить статус WebSocket подключения"""
+    return {
+        "connected": websocket_client.is_connected,
+        "bot_username": websocket_client.bot_username,
+        "base_url": websocket_client.base_url,
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 @app.post("/charts/cleanup")

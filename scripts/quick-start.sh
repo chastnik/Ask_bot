@@ -102,7 +102,7 @@ EOF
     
     source venv/bin/activate
     print_info "Обновляем pip и базовые пакеты для Python 3.13+..."
-    pip install --upgrade pip setuptools>=70.0.0 wheel>=0.42.0 > /dev/null 2>&1
+    pip install --upgrade pip "setuptools>=70.0.0" "wheel>=0.42.0" > /dev/null 2>&1
     print_info "Устанавливаем зависимости проекта..."
     pip install -r requirements.txt > /dev/null 2>&1
     print_success "Зависимости установлены"

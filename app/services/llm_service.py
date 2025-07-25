@@ -204,53 +204,59 @@ class LLMService:
         
         Args:
             user_question: Вопрос пользователя
-            context: Контекст (клиенты, проекты, шаблоны)
+            context: Контекст (клиенты, проекты, шаблоны, маппинги)
             
         Returns:
-            JQL запрос или None при ошибке
+            JQL запрос или None при ошибке, или строка "UNKNOWN_CLIENT:name" если нужно уточнить маппинг
         """
-        system_prompt = """Ты - эксперт по Jira Query Language (JQL). Твоя задача - преобразовать естественный вопрос пользователя в правильный JQL запрос.
+        system_prompt = """Ты должен создать JQL запрос. Отвечай ТОЛЬКО JQL БЕЗ объяснений!
 
-ВАЖНЫЕ ПРАВИЛА JQL:
-1. Проекты указываются через project = "KEY" или project in ("KEY1", "KEY2")
-2. Даты в формате YYYY-MM-DD или используй функции like startOfWeek(), startOfMonth()
-3. Статусы: "To Do", "In Progress", "Done", "Closed"
-4. assignee = "username" или assignee is EMPTY
-5. Для временных периодов используй created >= "2024-01-01" AND created <= "2024-01-31"
-6. worklogAuthor = "username" для поиска по автору worklog
-7. worklogDate >= "2024-01-01" для фильтрации по дате worklog
+Правила:
+- project = "ИМЯ_ПРОЕКТА" для поиска в конкретном проекте
+- summary ~ "ТЕКСТ" OR description ~ "ТЕКСТ" для поиска по содержимому 
+- created >= startOfMonth() для "этого месяца"
+- created >= startOfWeek() для "этой недели"
+- status = "Open" для открытых
+- assignee is EMPTY для неназначенных
 
-ДОСТУПНЫЕ ПОЛЯ:
-- project, key, summary, description, status, assignee, reporter, created, updated, resolved
-- priority, issuetype, worklogAuthor, worklogDate, timeSpent
-- labels, component, fixVersion, duedate
+ПРИМЕРЫ:
+Вход: "задачи в проекте ABC"
+Выход: project = "ABC"
 
-ФУНКЦИИ ВРЕМЕНИ:
-- startOfWeek(), endOfWeek(), startOfMonth(), endOfMonth()  
-- startOfYear(), endOfYear()
-- now(), "-1w", "-1M", "-3M"
+Вход: "найди задачи про Power BI"
+Выход: summary ~ "Power BI" OR description ~ "Power BI"
 
-Отвечай ТОЛЬКО JQL запросом, без объяснений."""
+Вход: "найди всё про Qlik Sense" 
+Выход: summary ~ "Qlik Sense" OR description ~ "Qlik Sense"
+
+Вход: "поиск упоминаний Python"
+Выход: summary ~ "Python" OR description ~ "Python"
+
+Вход: "новые задачи этого месяца"
+Выход: created >= startOfMonth()
+
+СТРОГО: отвечай только JQL без слов!"""
 
         # Формируем контекст для промпта
         context_text = ""
         if context.get("clients"):
-            clients = [f'"{c["name"]}"' for c in context["clients"]]
+            # context["clients"] - это список строк, не словарей
+            clients = [f'"{c}"' for c in context["clients"]]
             context_text += f"\nДоступные клиенты: {', '.join(clients)}"
             
         if context.get("projects"):
+            # context["projects"] - это список словарей с "key" и "name"
             projects = [f'"{p["key"]}" ({p["name"]})' for p in context["projects"]]
             context_text += f"\nДоступные проекты: {', '.join(projects)}"
             
         if context.get("users"):
+            # context["users"] - это список строк, не словарей
             users = [f'"{u}"' for u in context["users"]]
             context_text += f"\nПользователи: {', '.join(users)}"
 
-        prompt = f"""Пользователь спрашивает: "{user_question}"
+        prompt = f""""{user_question}"
 
-Контекст:{context_text}
-
-Создай JQL запрос для этого вопроса:"""
+Создай JQL:"""
 
         try:
             jql = await self.generate_completion(
@@ -261,9 +267,17 @@ class LLMService:
             )
             
             if jql:
-                # Очищаем от лишних символов
-                jql = jql.strip().strip('"').strip("'").strip("`")
-                logger.info(f"Сгенерирован JQL: {jql}")
+                # Логируем исходный ответ от LLM
+                logger.info(f"Исходный ответ от LLM: {jql}")
+                # Очищаем от лишних символов и тегов
+                jql = self._clean_jql_response(jql)
+                logger.info(f"Очищенный JQL: {jql}")
+                
+                # Дополнительная проверка валидности
+                if not jql or len(jql.strip()) < 5 or not self._is_valid_jql_format(jql):
+                    logger.warning(f"JQL невалидный: '{jql}', попробуем fallback")
+                    return await self._generate_smart_jql(user_question, context)
+                    
                 return jql
                 
             return None
@@ -322,12 +336,14 @@ class LLMService:
             )
             
             if response:
+                # Очищаем ответ от служебных тегов
+                clean_response = self._clean_json_response(response)
                 # Попытка распарсить JSON
                 try:
-                    intent_data = json.loads(response)
+                    intent_data = json.loads(clean_response)
                     return intent_data
                 except json.JSONDecodeError:
-                    logger.warning(f"Не удалось распарсить JSON ответ: {response}")
+                    logger.warning(f"Не удалось распарсить JSON ответ: {clean_response}")
                     
             # Fallback - простой анализ
             return self._simple_intent_analysis(user_question)
@@ -335,6 +351,368 @@ class LLMService:
         except Exception as e:
             logger.error(f"Ошибка анализа намерений: {e}")
             return self._simple_intent_analysis(user_question)
+
+    async def extract_entities_from_query(self, user_question: str) -> Dict[str, Any]:
+        """
+        Извлекает сущности из запроса пользователя для JQL генерации
+        
+        Args:
+            user_question: Вопрос пользователя
+            
+        Returns:
+            Dict с извлеченными сущностями
+        """
+        system_prompt = """Ты извлекаешь сущности из запроса. Отвечай ТОЛЬКО JSON.
+
+Пример: "найди баги с высоким приоритетом"
+{
+  "client_name": null,
+  "status_intent": "all",
+  "time_period": null,
+  "query_type": "list",
+  "search_text": null,
+  "issue_type": "Bug",
+  "assignee": null,
+  "priority": "High"
+}
+
+Правила:
+• "баги" → issue_type = "Bug"
+• "высокий приоритет" → priority = "High" 
+• "найди" → query_type = "list"
+• "сколько" → query_type = "count"
+• "без исполнителя" → assignee = "UNASSIGNED"
+• "сегодня" → time_period = "сегодня"
+• "закрыли" → status_intent = "closed"
+
+ТОЛЬКО JSON:"""
+
+        try:
+            prompt = f'{user_question}'
+            
+            result = await self.generate_completion(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.0,
+                max_tokens=150  # Увеличиваем для большего JSON
+            )
+            
+            if result:
+                logger.info(f"LLM ответ для сущностей (сырой): {result}")
+                # Очищаем и парсим JSON
+                cleaned_result = self._clean_json_response(result)
+                logger.info(f"LLM ответ для сущностей (очищенный): {cleaned_result}")
+                
+                try:
+                    entities = json.loads(cleaned_result)
+                    logger.info(f"✅ Извлечены сущности: {entities}")
+                    return entities
+                except json.JSONDecodeError as json_error:
+                    logger.error(f"❌ Ошибка парсинга JSON: {json_error}")
+                    logger.error(f"❌ Проблемный JSON: '{cleaned_result}'")
+                    # Fallback - возвращаем пустые сущности
+                    logger.warning("Использую fallback пустые сущности")
+                    return {
+                        "client_name": None,
+                        "status_intent": "all",
+                        "time_period": None,
+                        "query_type": "search",
+                        "search_text": None,
+                        "issue_type": None,
+                        "assignee": None,
+                        "priority": None
+                    }
+                
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка извлечения сущностей: {e}")
+            
+        # Общий fallback если все попытки провалились
+        logger.warning("⚠️ Использую общий fallback - пустые сущности")
+        return {
+            "client_name": None,
+            "status_intent": "all",
+            "time_period": None,
+            "query_type": "search",
+            "search_text": None,
+            "issue_type": None,
+            "assignee": None,
+            "priority": None
+        }
+    
+    def _clean_jql_response(self, response: str) -> str:
+        """Очищает ответ LLM от служебных тегов и оставляет только JQL"""
+        import re
+        
+        # Удаляем всё содержимое между <think> и </think>
+        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+        
+        # Удаляем любые XML/HTML теги
+        response = re.sub(r'<[^>]+>', '', response)
+        
+        # Удаляем лишние пробелы и переносы строк
+        response = re.sub(r'\s+', ' ', response).strip()
+        
+        # НЕ удаляем кавычки! Они важны для JQL значений
+        # Убираем только обрамляющие обратные кавычки (если есть)
+        if response.startswith('`') and response.endswith('`'):
+            response = response[1:-1].strip()
+        
+        return response
+    
+    def _clean_json_response(self, response: str) -> str:
+        """Агрессивно извлекает JSON из ответа LLM"""
+        import re
+        
+        # Удаляем всё содержимое между <think> и </think>
+        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+        
+        # Удаляем любые XML/HTML теги
+        response = re.sub(r'<[^>]+>', '', response)
+        
+        # Ищем последний (наиболее вероятный) JSON блок между фигурными скобками
+        json_matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, flags=re.DOTALL)
+        if json_matches:
+            # Берем последний найденный JSON (обычно самый полный)
+            json_candidate = json_matches[-1].strip()
+            logger.info(f"Найдено JSON кандидатов: {len(json_matches)}, выбран последний")
+            return json_candidate
+        
+        # Если JSON не найден в фигурных скобках, пробуем найти хотя бы ключи
+        if 'client_name' in response or 'status_intent' in response:
+            # Попробуем извлечь структуру из текста
+            lines = response.split('\n')
+            json_lines = []
+            in_json = False
+            for line in lines:
+                if '{' in line or in_json:
+                    in_json = True
+                    json_lines.append(line)
+                    if '}' in line:
+                        break
+            if json_lines:
+                potential_json = '\n'.join(json_lines)
+                json_match = re.search(r'\{.*?\}', potential_json, flags=re.DOTALL)
+                if json_match:
+                    return json_match.group(0).strip()
+        
+        # Последняя попытка - возвращаем то что есть
+        return response.strip()
+    
+    def _is_valid_jql_format(self, jql: str) -> bool:
+        """Проверяет, похож ли текст на JQL запрос"""
+        jql = jql.lower().strip()
+        
+        # Проверяем, что это не обычный текст
+        if any(word in jql for word in ['okay', 'let\'s', 'tackle', 'user', 'asking', 'first', 'need']):
+            return False
+            
+        # Проверяем наличие JQL ключевых слов
+        jql_keywords = ['project', 'created', 'status', 'assignee', 'and', 'or', '=', '>=', '<=']
+        has_keywords = any(keyword in jql for keyword in jql_keywords)
+        
+        return has_keywords and len(jql) < 200  # Ограничиваем длину JQL
+    
+    async def _generate_smart_jql(self, question: str, context: Dict[str, Any]) -> str:
+        """Генерирует JQL используя LLM для извлечения сущностей"""
+        
+        # 1. Извлекаем сущности из запроса с помощью LLM
+        entities = await self.extract_entities_from_query(question)
+        logger.info(f"Smart JQL: извлечены сущности: {entities}")
+        
+        # 2. Обрабатываем клиента и проект
+        client_name = entities.get("client_name")
+        project = None
+        
+        if client_name:
+            # Проверяем маппинги клиентов из RAG
+            client_mappings = context.get("client_mappings", {})
+            if client_mappings and client_name in client_mappings:
+                project = client_mappings[client_name]
+                logger.info(f"Использован маппинг клиента: {client_name} → {project}")
+            else:
+                # Если маппинг не найден - запрашиваем у пользователя
+                logger.info(f"Маппинг для клиента '{client_name}' не найден")
+                return f"UNKNOWN_CLIENT:{client_name}"
+        
+        # 3. Обрабатываем исполнителя
+        assignee = entities.get("assignee")
+        assignee_jql = None
+        if assignee:
+            if assignee == "UNASSIGNED":
+                assignee_jql = "assignee is EMPTY"
+            else:
+                # Ищем пользователя в маппингах или используем как есть
+                user_mappings = context.get("user_mappings", {})
+                if user_mappings and assignee in user_mappings:
+                    username = user_mappings[assignee]
+                    assignee_jql = f'assignee = "{username}"'
+                    logger.info(f"Использован маппинг пользователя: {assignee} → {username}")
+                else:
+                    # Пробуем использовать как username напрямую
+                    assignee_jql = f'assignee = "{assignee}"'
+                    logger.info(f"Используем исполнителя как есть: {assignee}")
+        
+        # 4. Формируем части JQL
+        jql_parts = []
+        
+        # Добавляем проект
+        if project:
+            clean_project = self._clean_project_name(project)
+            jql_parts.append(f'project = "{clean_project}"')
+        
+        # Добавляем исполнителя
+        if assignee_jql:
+            jql_parts.append(assignee_jql)
+        
+        # Добавляем тип задачи
+        issue_type = entities.get("issue_type")
+        if issue_type:
+            jql_parts.append(f'issuetype = "{issue_type}"')
+            logger.info(f"Добавлен тип задачи: {issue_type}")
+        
+        # Добавляем приоритет
+        priority = entities.get("priority")
+        if priority:
+            jql_parts.append(f'priority = "{priority}"')
+            logger.info(f"Добавлен приоритет: {priority}")
+        
+        # 5. Обрабатываем статусы на основе намерения
+        status_intent = entities.get("status_intent", "all")
+        jira_dictionaries = context.get('jira_dictionaries', {})
+        
+        if status_intent == "open":
+            open_statuses = self._get_open_statuses(jira_dictionaries)
+            if open_statuses:
+                statuses_str = ', '.join([f'"{s}"' for s in open_statuses])
+                jql_parts.append(f'status in ({statuses_str})')
+            else:
+                # Fallback если справочники недоступны
+                jql_parts.append('status in ("Открыт", "В работе")')
+                
+        elif status_intent == "closed":
+            closed_statuses = self._get_closed_statuses(jira_dictionaries)
+            if closed_statuses:
+                statuses_str = ', '.join([f'"{s}"' for s in closed_statuses])
+                jql_parts.append(f'status in ({statuses_str})')
+            else:
+                # Fallback если справочники недоступны
+                jql_parts.append('status in ("Закрыт", "Готово", "Отменен")')
+        
+        # 6. Обрабатываем временной период
+        time_period = entities.get("time_period")
+        if time_period:
+            time_jql = self._convert_time_period_to_jql(time_period)
+            if time_jql:
+                jql_parts.append(time_jql)
+        
+        # 7. Обрабатываем текстовый поиск
+        search_text = entities.get("search_text")
+        if search_text:
+            # Ищем по заголовку и описанию задач
+            # Экранируем кавычки для безопасности
+            safe_search_text = search_text.replace('"', '\\"')
+            text_search_jql = f'(summary ~ "{safe_search_text}" OR description ~ "{safe_search_text}")'
+            jql_parts.append(text_search_jql)
+            logger.info(f"Добавлен текстовый поиск: {search_text}")
+        
+        # 8. Улучшенный fallback если ничего не найдено
+        if not jql_parts:
+            if project:
+                clean_project = self._clean_project_name(project)
+                return f'project = "{clean_project}"'
+            else:
+                # Более разумный fallback - задачи текущего пользователя за неделю
+                return 'assignee = currentUser() AND created >= startOfWeek()'
+        
+        final_jql = ' AND '.join(jql_parts)
+        logger.info(f"Smart JQL сгенерирован: {final_jql}")
+        return final_jql
+    
+    def _convert_time_period_to_jql(self, time_period: str) -> str:
+        """Конвертирует временной период в JQL условие"""
+        if not time_period:
+            return ""
+            
+        time_lower = time_period.lower()
+        
+        # Относительные периоды
+        if time_lower in ['этот месяц', 'этом месяце', 'в этом месяце']:
+            return 'created >= startOfMonth()'
+        elif time_lower in ['прошлый месяц', 'прошлом месяце']:
+            return 'created >= startOfMonth(-1) AND created < startOfMonth()'
+        elif time_lower in ['эта неделя', 'этой неделе', 'за эту неделю']:
+            return 'created >= startOfWeek()'
+        elif time_lower in ['прошлая неделя', 'прошлой неделе', 'за прошлую неделю']:
+            return 'created >= startOfWeek(-1) AND created < startOfWeek()'
+        elif time_lower in ['сегодня', 'за сегодня', 'созданные сегодня']:
+            return 'created >= startOfDay()'
+        elif time_lower in ['вчера', 'за вчера']:
+            return 'created >= startOfDay(-1) AND created < startOfDay()'
+        elif time_lower in ['последний месяц', 'за последний месяц']:
+            return 'created >= -30d'
+        elif time_lower in ['последняя неделя', 'за последнюю неделю']:
+            return 'created >= -7d'
+        
+        # Конкретные месяцы (упрощенно - за текущий год)
+        months_mapping = {
+            'январь': '01', 'января': '01', 'в январе': '01',
+            'февраль': '02', 'февраля': '02', 'в феврале': '02', 
+            'март': '03', 'марта': '03', 'в марте': '03',
+            'апрель': '04', 'апреля': '04', 'в апреле': '04',
+            'май': '05', 'мая': '05', 'в мае': '05',
+            'июнь': '06', 'июня': '06', 'в июне': '06',
+            'июль': '07', 'июля': '07', 'в июле': '07',
+            'август': '08', 'августа': '08', 'в августе': '08',
+            'сентябрь': '09', 'сентября': '09', 'в сентябре': '09',
+            'октябрь': '10', 'октября': '10', 'в октябре': '10',
+            'ноябрь': '11', 'ноября': '11', 'в ноябре': '11',
+            'декабрь': '12', 'декабря': '12', 'в декабре': '12'
+        }
+        
+        for month_name, month_num in months_mapping.items():
+            if month_name in time_lower:
+                from datetime import datetime
+                current_year = datetime.now().year
+                
+                # Вычисляем следующий месяц для верхней границы
+                month_int = int(month_num)
+                if month_int == 12:
+                    next_month = "01"
+                    next_year = current_year + 1
+                else:
+                    next_month = f"{month_int + 1:02d}"
+                    next_year = current_year
+                
+                return f'created >= "{current_year}-{month_num}-01" AND created < "{next_year}-{next_month}-01"'
+        
+        # Если не распознали - возвращаем пустую строку
+        return ""
+    
+    def _clean_project_name(self, project_name: str) -> str:
+        """Очищает название проекта для безопасного использования в JQL"""
+        # Убираем лишние пробелы и переводим в нижний регистр для поиска ключа
+        cleaned = project_name.strip()
+        
+        # Список возможных ключей проектов для общих названий
+        project_mappings = {
+            'иль де ботэ': 'IDB',
+            'иль де боте': 'IDB', 
+            'ильдеботэ': 'IDB',
+            'тестовый': 'TEST',
+            'демо': 'DEMO'
+        }
+        
+        # Проверяем маппинги (нечувствительно к регистру)
+        for name_variant, key in project_mappings.items():
+            if name_variant in cleaned.lower():
+                return key
+        
+        # Если это похоже на ключ проекта (короткий, заглавные буквы)
+        if len(cleaned) <= 10 and cleaned.isupper():
+            return cleaned
+            
+        # Возвращаем очищенное название
+        return cleaned
     
     def _simple_intent_analysis(self, question: str) -> Dict[str, Any]:
         """
@@ -523,6 +901,82 @@ class LLMService:
         # Fallback
         return {"PERSON": [], "ORG": [], "DATE": [], "PROJECT": []}
 
+
+
+    def _get_open_statuses(self, jira_dictionaries: Dict[str, List[Dict[str, Any]]]) -> List[str]:
+        """Получает список открытых статусов из справочников Jira"""
+        try:
+            statuses = jira_dictionaries.get('statuses', [])
+            open_statuses = set()  # Используем set для автоматической дедупликации
+            
+            for status in statuses:
+                category = status.get('category', '').lower()
+                name = status.get('name', '')
+                status_id = status.get('id', '')
+                
+                logger.debug(f"Проверяем статус: name='{name}', category='{category}', id='{status_id}'")
+                
+                # Приоритет - категории статусов
+                if category in ['to do', 'indeterminate', 'new']:
+                    open_statuses.add(name)
+                    logger.debug(f"  ✅ Добавлен по категории: {name}")
+                # Статусы 'в работе' - открытые
+                elif 'работе' in name.lower() and 'не' not in name.lower():
+                    open_statuses.add(name)
+                    logger.debug(f"  ✅ Добавлен как 'в работе': {name}")
+                # Точная проверка по названию
+                elif name.lower() in ['открыт', 'открыто', 'новый', 'создан', 'создано']:
+                    open_statuses.add(name)
+                    logger.debug(f"  ✅ Добавлен точным названием: {name}")
+            
+            # Преобразуем в список и сортируем для стабильности
+            result = sorted(list(open_statuses))
+            logger.info(f"Найдены открытые статусы ({len(result)}): {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения открытых статусов: {e}")
+            return []
+    
+    def _get_closed_statuses(self, jira_dictionaries: Dict[str, List[Dict[str, Any]]]) -> List[str]:
+        """Получает список закрытых статусов из справочников Jira"""
+        try:
+            statuses = jira_dictionaries.get('statuses', [])
+            closed_statuses_set = set()  # Используем set для дедупликации
+            
+            for status in statuses:
+                category = status.get('category', '').lower()
+                name = status.get('name', '').lower()
+                
+                # Сначала проверяем категорию Jira (самый надежный способ)
+                if category in ['done', 'complete', 'closed']:
+                    closed_statuses_set.add(status.get('name'))
+                else:
+                    # Для статусов без правильной категории - проверяем по ключевым словам
+                    # НО исключаем статусы с "к выполнению", "для выполнения", "в работе" и т.п.
+                    if (any(keyword in name for keyword in ['закрыт', 'готово', 'завершен', 'отменен', 'cancel']) or
+                        (name.endswith('выполнено') and 'к выполнению' not in name and 'для выполнения' not in name)):
+                        # Исключаем статусы которые содержат слова указывающие на активную работу или подготовку
+                        if not any(exclude_word in name for exclude_word in [
+                            'работе', 'progress', 'открыт', 'open', 'новый', 'new',
+                            'к выполнению', 'для выполнения', 'отобрано', 'назначено', 
+                            'в очереди', 'ожидание', 'планирование'
+                        ]):
+                            closed_statuses_set.add(status.get('name'))  # Добавляем оригинальное имя (не lowercase)
+            
+            # Добавляем общие закрытые статусы если они есть в справочнике
+            for common_status in ["Закрыт", "Готово", "Выполнено", "Done", "Closed", "Resolved", "Cancelled", "Отменен"]:
+                for status in statuses:
+                    if status.get('name', '').lower() == common_status.lower():
+                        closed_statuses_set.add(status.get('name'))
+            
+            closed_statuses_list = list(closed_statuses_set)
+            logger.info(f"Найдены закрытые статусы: {closed_statuses_list}")
+            return closed_statuses_list
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения закрытых статусов: {e}")
+            return []
 
 # Глобальный экземпляр сервиса
 llm_service = LLMService() 

@@ -388,6 +388,7 @@ class HealthCheck(BaseSchema):
     redis: bool
     jira: bool
     llm: bool
+    websocket: bool = False  # Статус WebSocket подключения
     timestamp: datetime
 
 

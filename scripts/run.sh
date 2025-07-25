@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Ask Bot - скрипт запуска для Unix систем (Linux/macOS)
-# Проверяет и устанавливает все зависимости, настраивает окружение
+# Ask Bot - автоматический запуск
+# Проверяет зависимости и запускает приложение без вопросов
 
 set -e  # Остановить выполнение при ошибке
 
@@ -32,7 +32,7 @@ print_error() {
 print_header() {
     echo -e "${BLUE}"
     echo "🤖 ==============================================="
-    echo "   Ask Bot - Универсальный чат-бот для Jira"
+    echo "   Ask Bot - Автоматический запуск"
     echo "===============================================${NC}"
     echo
 }
@@ -83,20 +83,14 @@ setup_venv() {
 install_dependencies() {
     print_info "Проверяем и устанавливаем зависимости..."
     
-    # Обновляем pip и устанавливаем базовые пакеты (критично для Python 3.13+)
-    print_info "Обновляем pip и базовые пакеты для Python 3.13+..."
-    pip install --upgrade pip setuptools>=70.0.0 wheel>=0.42.0
-    
-    # Проверяем успешность установки
-    if [ $? -ne 0 ]; then
-        print_error "Ошибка установки базовых пакетов"
-        exit 1
-    fi
+    # Обновляем pip и устанавливаем базовые пакеты
+    print_info "Обновляем pip и базовые пакеты..."
+    pip install --upgrade pip setuptools wheel --quiet
     
     # Устанавливаем зависимости
     if [ -f "requirements.txt" ]; then
         print_info "Устанавливаем пакеты из requirements.txt..."
-        pip install -r requirements.txt
+        pip install -r requirements.txt --quiet
         print_success "Зависимости установлены"
     else
         print_error "Файл requirements.txt не найден!"
@@ -110,137 +104,50 @@ check_config() {
     
     if [ ! -f ".env" ]; then
         if [ -f "env.example" ]; then
-            print_warning "Файл .env не найден"
-            echo -n "Создать .env файл из шаблона? (y/N): "
-            read -r create_env
-            if [[ $create_env =~ ^[Yy]$ ]]; then
-                cp env.example .env
-                print_success "Файл .env создан из шаблона"
-                print_warning "⚠️  ВАЖНО: Отредактируйте .env файл с вашими настройками!"
-                echo "   Особенно важны:"
-                echo "   - MATTERMOST_URL и MATTERMOST_TOKEN"
-                echo "   - JIRA_BASE_URL"
-                echo "   - LLM_PROXY_URL"
-                echo
-            else
-                print_warning "Приложение может не работать без .env конфигурации"
-            fi
+            print_warning "Файл .env не найден, создаем из шаблона..."
+            cp env.example .env
+            print_success "Файл .env создан из шаблона"
+            print_warning "⚠️  ВАЖНО: Отредактируйте .env файл с вашими настройками!"
         else
             print_error "Ни .env, ни env.example файлы не найдены!"
+            exit 1
         fi
     else
         print_success "Файл .env найден"
     fi
 }
 
-# Проверка и завершение запущенного бота
-check_running_bot() {
-    print_info "Проверяем запущенные экземпляры Ask Bot..."
+# Завершение запущенных процессов
+stop_running_processes() {
+    print_info "Проверяем запущенные экземпляры..."
     
-    # Проверяем процессы uvicorn с нашим приложением
-    RUNNING_PIDS=$(ps aux | grep -E "uvicorn.*app\.main:app" | grep -v grep | awk '{print $2}')
+    # Завершаем процессы uvicorn с нашим приложением
+    RUNNING_PIDS=$(ps aux | grep -E "uvicorn.*app\.main:app" | grep -v grep | awk '{print $2}' || true)
     
     if [ ! -z "$RUNNING_PIDS" ]; then
-        print_warning "Найдены запущенные экземпляры Ask Bot (PID: $(echo $RUNNING_PIDS | tr '\n' ' '))"
-        echo -n "Завершить работу существующих экземпляров? (Y/n): "
-        read -r kill_existing
-        
-        if [[ ! $kill_existing =~ ^[Nn]$ ]]; then
-            print_info "Завершаем работу существующих экземпляров..."
-            for pid in $RUNNING_PIDS; do
-                print_info "Завершаем процесс $pid..."
-                kill -TERM $pid 2>/dev/null || true
-                sleep 2
-                
-                # Проверяем, завершился ли процесс
-                if kill -0 $pid 2>/dev/null; then
-                    print_warning "Процесс $pid не завершился, принудительно завершаем..."
-                    kill -KILL $pid 2>/dev/null || true
-                fi
-            done
-            print_success "Существующие экземпляры завершены"
-            sleep 1
-        else
-            print_error "Отменено. Завершите существующие экземпляры вручную или используйте другой порт"
-            exit 1
-        fi
+        print_info "Завершаем существующие экземпляры Ask Bot..."
+        for pid in $RUNNING_PIDS; do
+            kill -TERM $pid 2>/dev/null || true
+        done
+        sleep 2
+        print_success "Существующие экземпляры завершены"
     fi
     
-    # Проверяем занятость порта 8000
+    # Освобождаем порт 8000
     if command -v lsof &> /dev/null; then
         PORT_PROCESS=$(lsof -ti :8000 2>/dev/null || true)
         if [ ! -z "$PORT_PROCESS" ]; then
-            print_warning "Порт 8000 занят процессом $PORT_PROCESS"
-            echo -n "Завершить процесс на порту 8000? (Y/n): "
-            read -r kill_port
-            
-            if [[ ! $kill_port =~ ^[Nn]$ ]]; then
-                print_info "Завершаем процесс на порту 8000..."
-                kill -TERM $PORT_PROCESS 2>/dev/null || true
-                sleep 2
-                
-                if kill -0 $PORT_PROCESS 2>/dev/null; then
-                    kill -KILL $PORT_PROCESS 2>/dev/null || true
-                fi
-                print_success "Процесс на порту 8000 завершен"
-            else
-                print_error "Отменено. Порт 8000 занят"
-                exit 1
-            fi
-        fi
-    elif command -v netstat &> /dev/null; then
-        # Альтернативная проверка через netstat
-        PORT_CHECK=$(netstat -ln | grep ":8000 " || true)
-        if [ ! -z "$PORT_CHECK" ]; then
-            print_warning "Порт 8000 уже используется"
-            print_info "Проверьте: netstat -ln | grep :8000"
-        fi
-    fi
-    
-    print_success "Порт 8000 свободен для использования"
-}
-
-# Проверка внешних зависимостей
-check_external_deps() {
-    print_info "Проверяем внешние зависимости..."
-    
-    # Проверяем Redis (если не используется Docker)
-    if ! command -v redis-server &> /dev/null && ! command -v docker &> /dev/null; then
-        print_warning "Redis Server не найден. Убедитесь, что Redis запущен или используйте Docker"
-    fi
-    
-    # Проверяем Docker
-    if command -v docker &> /dev/null; then
-        print_success "Docker найден"
-        if command -v docker-compose &> /dev/null; then
-            print_success "Docker Compose найден"
-            echo -n "Запустить через Docker Compose? (y/N): "
-            read -r use_docker
-            if [[ $use_docker =~ ^[Yy]$ ]]; then
-                print_info "Запускаем через Docker Compose..."
-                docker-compose up -d
-                print_success "Приложение запущено в Docker контейнерах"
-                print_info "API доступно на: http://localhost:8000"
-                print_info "Для остановки используйте: docker-compose down"
-                exit 0
-            fi
+            print_info "Освобождаем порт 8000..."
+            kill -TERM $PORT_PROCESS 2>/dev/null || true
+            sleep 1
+            print_success "Порт 8000 освобожден"
         fi
     fi
 }
 
-# Инициализация базы данных
-init_database() {
-    print_info "Проверяем состояние базы данных..."
-    
-    if [ -f "scripts/init_db.py" ]; then
-        echo -n "Инициализировать базу данных? (y/N): "
-        read -r init_db
-        if [[ $init_db =~ ^[Yy]$ ]]; then
-            print_info "Инициализируем базу данных..."
-            $PYTHON_CMD scripts/init_db.py
-        fi
-    fi
-}
+
+
+
 
 # Запуск приложения
 start_app() {
@@ -252,32 +159,15 @@ start_app() {
     print_info "Для остановки нажмите Ctrl+C"
     echo
     
-    # Выбираем режим запуска
-    echo -n "Запустить в режиме разработки с автоперезагрузкой? (Y/n): "
-    read -r dev_mode
-    
     if command -v uvicorn &> /dev/null; then
-        if [[ $dev_mode =~ ^[Nn]$ ]]; then
-            # Продакшн режим без reload
-            print_info "Запуск в продакшн режиме без автоперезагрузки..."
-            uvicorn app.main:app --host 0.0.0.0 --port 8000
-        else
-            # Режим разработки с оптимизированным reload
-            print_info "Запуск в режиме разработки с автоперезагрузкой..."
-            if [ -f "uvicorn.json" ] && [ -s "uvicorn.json" ]; then
-                print_info "Используем конфигурацию из uvicorn.json"
-                uvicorn --config uvicorn.json
-            else
-                # Fallback к параметрам командной строки
-                print_info "Используем оптимизированные параметры CLI"
-                uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \
-                    --reload-dir="app" \
-                    --reload-exclude="venv/**/*" \
-                    --reload-exclude=".venv/**/*" \
-                    --reload-exclude="*.egg-info/**/*" \
-                    --reload-exclude="__pycache__/**/*"
-            fi
-        fi
+        # Запуск в режиме разработки с автоперезагрузкой
+        print_info "Запуск в режиме разработки..."
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \
+            --reload-dir="app" \
+            --reload-exclude="venv/**/*" \
+            --reload-exclude=".venv/**/*" \
+            --reload-exclude="*.egg-info/**/*" \
+            --reload-exclude="__pycache__/**/*"
     else
         print_error "uvicorn не найден! Установите его: pip install uvicorn"
         exit 1
@@ -298,9 +188,7 @@ main() {
     setup_venv
     install_dependencies
     check_config
-    check_external_deps
-    init_database
-    check_running_bot
+    stop_running_processes
     start_app
 }
 

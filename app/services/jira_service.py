@@ -135,6 +135,105 @@ class JiraService:
         except Exception as e:
             logger.error(f"Ошибка при получении информации о пользователе: {e}")
             return None
+
+    async def search_users(self, query: str, username: str, password: Optional[str] = None,
+                         token: Optional[str] = None, max_results: int = 50) -> List[Dict[str, Any]]:
+        """
+        Поиск пользователей в Jira по запросу
+        
+        Args:
+            query: Поисковый запрос (имя, email, username)
+            username: Имя пользователя для авторизации
+            password: Пароль (опционально)
+            token: API токен (опционально)
+            max_results: Максимальное количество результатов
+            
+        Returns:
+            Список найденных пользователей
+        """
+        try:
+            headers = {"Content-Type": "application/json"}
+            
+            if token:
+                headers.update(self._get_token_auth_header(username, token))
+            elif password:
+                headers.update(self._get_auth_header(username, password))
+            else:
+                raise JiraAuthError("Не указан пароль или токен")
+            
+            # Используем search endpoint для поиска пользователей
+            url = urljoin(self.base_url, "/rest/api/2/user/search")
+            params = {
+                "query": query,
+                "maxResults": max_results
+            }
+            
+            async with self.session.get(url, headers=headers, params=params) as response:
+                if response.status == 200:
+                    users = await response.json()
+                    logger.info(f"Найдено пользователей: {len(users)} для запроса '{query}'")
+                    return users
+                elif response.status == 401:
+                    raise JiraAuthError("Неавторизованный доступ к Jira")
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Ошибка поиска пользователей: {response.status} - {error_text}")
+                    return []
+                    
+        except (JiraAuthError):
+            raise
+        except Exception as e:
+            logger.error(f"Ошибка при поиске пользователей: {e}")
+            return []
+
+    async def find_user_by_display_name(self, display_name: str, username: str, 
+                                      password: Optional[str] = None, token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Ищет пользователя по отображаемому имени
+        
+        Args:
+            display_name: Отображаемое имя (например "Олег Антонов")
+            username: Имя пользователя для авторизации
+            password: Пароль (опционально)
+            token: API токен (опционально)
+            
+        Returns:
+            Информация о пользователе или None
+        """
+        try:
+            # Сначала ищем по полному имени
+            users = await self.search_users(display_name, username, password, token)
+            
+            # Ищем точное совпадение по displayName
+            for user in users:
+                if user.get("displayName", "").lower() == display_name.lower():
+                    logger.info(f"Найден пользователь: {display_name} → {user.get('name', 'N/A')}")
+                    return user
+            
+            # Если точного совпадения нет, ищем частичное совпадение
+            for user in users:
+                if display_name.lower() in user.get("displayName", "").lower():
+                    logger.info(f"Найдено частичное совпадение: {display_name} → {user.get('displayName')} ({user.get('name', 'N/A')})")
+                    return user
+            
+            # Попробуем поиск по частям имени (имя и фамилия отдельно)
+            name_parts = display_name.split()
+            if len(name_parts) >= 2:
+                for part in name_parts:
+                    if len(part) >= 3:  # Минимум 3 символа для поиска
+                        users = await self.search_users(part, username, password, token)
+                        for user in users:
+                            user_display = user.get("displayName", "").lower()
+                            if all(part.lower() in user_display for part in name_parts):
+                                logger.info(f"Найден пользователь по частям имени: {display_name} → {user.get('displayName')} ({user.get('name', 'N/A')})")
+                                return user
+            
+            logger.warning(f"Пользователь не найден: {display_name}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка поиска пользователя {display_name}: {e}")
+            return None
     
     async def search_issues(self, jql: str, username: str, password: Optional[str] = None,
                           token: Optional[str] = None, start_at: int = 0, 
@@ -521,6 +620,150 @@ class JiraService:
         except Exception as e:
             logger.error(f"Ошибка агрегации worklogs: {e}")
             raise JiraAPIError(f"Ошибка агрегации worklogs: {e}")
+
+    # === Методы для получения справочников Jira ===
+    
+    async def get_statuses(self, username: str, password: Optional[str] = None, 
+                          token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Получает все доступные статусы из Jira"""
+        try:
+            headers = {"Content-Type": "application/json"}
+            
+            if token:
+                headers.update(self._get_token_auth_header(username, token))
+            elif password:
+                headers.update(self._get_auth_header(username, password))
+            else:
+                raise JiraAuthError("Не указан пароль или токен")
+            
+            url = urljoin(self.base_url, "/rest/api/2/status")
+            
+            async with self.session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    statuses = await response.json()
+                    return [
+                        {
+                            "id": status.get("id"),
+                            "name": status.get("name"),
+                            "description": status.get("description", ""),
+                            "category": status.get("statusCategory", {}).get("name", "")
+                        }
+                        for status in statuses
+                    ]
+                else:
+                    error_text = await response.text()
+                    raise JiraAPIError(f"Ошибка получения статусов ({response.status}): {error_text}")
+                    
+        except (JiraAPIError, JiraAuthError):
+            raise
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при получении статусов: {e}")
+            raise JiraAPIError(f"Неожиданная ошибка: {e}")
+    
+    async def get_issue_types(self, username: str, password: Optional[str] = None, 
+                             token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Получает все типы задач из Jira"""
+        try:
+            headers = {"Content-Type": "application/json"}
+            
+            if token:
+                headers.update(self._get_token_auth_header(username, token))
+            elif password:
+                headers.update(self._get_auth_header(username, password))
+            else:
+                raise JiraAuthError("Не указан пароль или токен")
+            
+            url = urljoin(self.base_url, "/rest/api/2/issuetype")
+            
+            async with self.session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    issue_types = await response.json()
+                    return [
+                        {
+                            "id": issue_type.get("id"),
+                            "name": issue_type.get("name"),
+                            "description": issue_type.get("description", ""),
+                            "subtask": issue_type.get("subtask", False)
+                        }
+                        for issue_type in issue_types
+                    ]
+                else:
+                    error_text = await response.text()
+                    raise JiraAPIError(f"Ошибка получения типов задач ({response.status}): {error_text}")
+                    
+        except (JiraAPIError, JiraAuthError):
+            raise
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при получении типов задач: {e}")
+            raise JiraAPIError(f"Неожиданная ошибка: {e}")
+    
+    async def get_priorities(self, username: str, password: Optional[str] = None, 
+                            token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Получает все приоритеты из Jira"""
+        try:
+            headers = {"Content-Type": "application/json"}
+            
+            if token:
+                headers.update(self._get_token_auth_header(username, token))
+            elif password:
+                headers.update(self._get_auth_header(username, password))
+            else:
+                raise JiraAuthError("Не указан пароль или токен")
+            
+            url = urljoin(self.base_url, "/rest/api/2/priority")
+            
+            async with self.session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    priorities = await response.json()
+                    return [
+                        {
+                            "id": priority.get("id"),
+                            "name": priority.get("name"),
+                            "description": priority.get("description", "")
+                        }
+                        for priority in priorities
+                    ]
+                else:
+                    error_text = await response.text()
+                    raise JiraAPIError(f"Ошибка получения приоритетов ({response.status}): {error_text}")
+                    
+        except (JiraAPIError, JiraAuthError):
+            raise
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при получении приоритетов: {e}")
+            raise JiraAPIError(f"Неожиданная ошибка: {e}")
+
+    async def get_all_dictionaries(self, username: str, password: Optional[str] = None, 
+                                  token: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """Получает все справочники Jira одним запросом"""
+        try:
+            dictionaries = {}
+            
+            # Получаем все справочники параллельно
+            import asyncio
+            results = await asyncio.gather(
+                self.get_projects(username, password, token),
+                self.get_statuses(username, password, token),
+                self.get_issue_types(username, password, token),
+                self.get_priorities(username, password, token),
+                return_exceptions=True
+            )
+            
+            # Обрабатываем результаты
+            dict_names = ["projects", "statuses", "issue_types", "priorities"]
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning(f"Ошибка получения {dict_names[i]}: {result}")
+                    dictionaries[dict_names[i]] = []
+                else:
+                    dictionaries[dict_names[i]] = result
+            
+            logger.info(f"Получены справочники: {', '.join([f'{k}({len(v)})' for k, v in dictionaries.items()])}")
+            return dictionaries
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения справочников: {e}")
+            raise JiraAPIError(f"Ошибка получения справочников: {e}")
 
 
 # Глобальный экземпляр сервиса

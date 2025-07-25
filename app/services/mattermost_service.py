@@ -549,21 +549,18 @@ class MattermostService:
                 "message": message
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    headers=self._get_headers(), # Use self._get_headers() for consistency
-                    json=payload,
-                    ssl=self.ssl_verify
-                ) as response:
-                    
-                    if response.status == 201:
-                        logger.info(f"Личное сообщение отправлено пользователю {user_id}")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Ошибка отправки личного сообщения: {response.status} - {error_text}")
-                        return False
+            async with self.session.post(
+                url,
+                json=payload
+            ) as response:
+                
+                if response.status == 201:
+                    logger.info(f"Личное сообщение отправлено пользователю {user_id}")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Ошибка отправки личного сообщения: {response.status} - {error_text}")
+                    return False
                         
         except Exception as e:
             logger.error(f"Ошибка при отправке личного сообщения пользователю {user_id}: {e}")
@@ -592,22 +589,19 @@ class MattermostService:
             
             payload = [bot_user_id, user_id]
             
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    headers=self._get_headers(), # Use self._get_headers() for consistency
-                    json=payload,
-                    ssl=self.ssl_verify
-                ) as response:
-                    
-                    if response.status in [200, 201]:
-                        channel_data = await response.json()
-                        logger.info(f"Канал личных сообщений создан/получен для пользователя {user_id}")
-                        return channel_data
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Ошибка создания канала личных сообщений: {response.status} - {error_text}")
-                        return None
+            async with self.session.post(
+                url,
+                json=payload
+            ) as response:
+                
+                if response.status in [200, 201]:
+                    channel_data = await response.json()
+                    logger.info(f"Канал личных сообщений создан/получен для пользователя {user_id}")
+                    return channel_data
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Ошибка создания канала личных сообщений: {response.status} - {error_text}")
+                    return None
                         
         except Exception as e:
             logger.error(f"Ошибка при создании канала личных сообщений с пользователем {user_id}: {e}")
@@ -623,20 +617,14 @@ class MattermostService:
         try:
             url = f"{self.base_url}/api/v4/users/me"
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    headers=self._get_headers(), # Use self._get_headers() for consistency
-                    ssl=self.ssl_verify
-                ) as response:
-                    
-                    if response.status == 200:
-                        user_data = await response.json()
-                        return user_data
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Ошибка получения информации о текущем пользователе: {response.status} - {error_text}")
-                        return None
+            async with self.session.get(url) as response:
+                if response.status == 200:
+                    user_data = await response.json()
+                    return user_data
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Ошибка получения информации о текущем пользователе: {response.status} - {error_text}")
+                    return None
                         
         except Exception as e:
             logger.error(f"Ошибка при получении информации о текущем пользователе: {e}")
