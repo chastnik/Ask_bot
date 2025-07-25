@@ -4,6 +4,7 @@
 import aiohttp
 import asyncio
 import json
+import re
 from typing import Dict, List, Optional, Any, Union, Generator
 from loguru import logger
 
@@ -819,13 +820,21 @@ class LLMService:
         """
         question_lower = question.lower()
         
-        # Определяем тип запроса
-        if any(word in question_lower for word in ["сколько", "количество", "count", "статистика"]):
+        # Определяем тип запроса (worklog проверяем первым, так как может содержать "сколько")
+        if any(phrase in question_lower for phrase in [
+            "сколько часов", "часов списал", "время списал", "трудозатраты", "worklog",
+            "сколько потратил", "сколько указал", "списал времени", "потратили времени",
+            "указал времени", "трудозатрат", "время по", "часы по", "время на",
+            "часы на", "затратил", "затратили", "списали", "потратил время",
+            "указал время", "вложили времени", "затрачено времени", "списано времени",
+            "сколько времени потратил", "сколько времени списал", "время потратил",
+            "время указал", "времени на"
+        ]):
+            intent = "worklog"
+        elif any(word in question_lower for word in ["сколько", "количество", "count", "статистика"]):
             intent = "analytics"
         elif any(word in question_lower for word in ["график", "диаграмма", "chart", "покажи"]):
             intent = "chart"
-        elif any(word in question_lower for word in ["час", "время", "worklog", "списал"]):
-            intent = "worklog"
         elif any(word in question_lower for word in ["статус", "status", "progress"]):
             intent = "status"
         else:
@@ -836,9 +845,61 @@ class LLMService:
             "график", "диаграмма", "chart", "покажи", "визуал"
         ])
         
-        # Определяем группировку
+        # Определяем параметры
         parameters = {}
         
+        # Для worklog запросов извлекаем дополнительные параметры
+        if intent == "worklog":
+            # Определяем кто (пользователь) - используем более точные паттерны
+            user_patterns = [
+                r"([А-Яа-я]+(?:\s+[А-Яа-я]+){0,2})\s+(?:списал|потратил|указал|затратил)",  # "Иванов списал"
+                r"(?:списал|потратил|указал|затратил)\s+([А-Яа-я]+(?:\s+[А-Яа-я]+){0,2})",  # "списал Иванов"
+                r"трудозатраты\s+([А-Яа-я]+(?:\s+[А-Яа-я]+){0,2})(?:\s+за|\s+в|\s*$)",  # "трудозатраты Иванова за"
+                r"(?:время|часы)\s+([А-Яа-я]+(?:\s+[А-Яа-я]+){0,2})(?:\s+за|\s+в|\s+на|\s*$)",  # "время Иванова за"
+            ]
+            
+            for pattern in user_patterns:
+                match = re.search(pattern, question_lower)
+                if match:
+                    name = match.group(1).strip()
+                    # Фильтруем стоп-слова
+                    stop_words = ['сколько', 'время', 'часов', 'часы', 'которое', 'которые', 'за', 'в', 'на', 'по']
+                    name_parts = [part for part in name.split() if part not in stop_words]
+                    if name_parts:
+                        parameters["assignee"] = ' '.join(name_parts)
+                        break
+            
+            # Определяем временной период
+            if any(period in question_lower for period in ["в июле", "июль", "за июль"]):
+                parameters["time_period"] = "июль"
+            elif any(period in question_lower for period in ["в июне", "июнь", "за июнь"]):
+                parameters["time_period"] = "июнь"
+            elif any(period in question_lower for period in ["этот месяц", "в этом месяце"]):
+                parameters["time_period"] = "этот месяц"
+            elif any(period in question_lower for period in ["прошлый месяц", "в прошлом месяце"]):
+                parameters["time_period"] = "прошлый месяц"
+            elif any(period in question_lower for period in ["эта неделя", "на этой неделе"]):
+                parameters["time_period"] = "эта неделя"
+            elif any(period in question_lower for period in ["прошлая неделя", "на прошлой неделе"]):
+                parameters["time_period"] = "прошлая неделя"
+            elif any(period in question_lower for period in ["сегодня", "за сегодня"]):
+                parameters["time_period"] = "сегодня"
+            elif any(period in question_lower for period in ["вчера", "за вчера"]):
+                parameters["time_period"] = "вчера"
+                
+            # Определяем проект если указан
+            project_patterns = [
+                r"(?:на проект|по проекту|в проекте)\s+([A-Z]+(?:-\w+)*)",
+                r"проект\s+([A-Z]+(?:-\w+)*)",
+            ]
+            
+            for pattern in project_patterns:
+                match = re.search(pattern, question_lower)
+                if match:
+                    parameters["project"] = match.group(1).strip()
+                    break
+        
+        # Для обычных запросов определяем группировку
         if any(phrase in question_lower for phrase in [
             "по проектам", "группируй по проектам", "группировка по проектам", 
             "в разрезе проектов", "разбить по проектам"

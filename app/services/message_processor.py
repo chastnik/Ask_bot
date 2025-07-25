@@ -472,6 +472,9 @@ class MessageProcessor:
             if intent_type == "analytics":
                 # Формируем аналитический ответ
                 response_text = await self._format_analytics_response(issues, intent, query)
+            elif intent_type == "worklog":
+                # Формируем ответ по трудозатратам
+                response_text = await self._format_worklog_response(issues, intent, query, user_id)
             else:
                 # Формируем стандартный текстовый ответ со списком
                 response_text = f"📋 **Найдено задач:** {issues.total}\n\n"
@@ -866,6 +869,132 @@ class MessageProcessor:
                 response += f"\n📈 **Активные {group_label}:** {len(sorted_groups)}"
                 
         return response
+    
+    async def _format_worklog_response(self, issues, intent: Dict[str, Any], original_query: str, user_id: str) -> str:
+        """
+        Форматирует ответ по трудозатратам (worklog)
+        
+        Args:
+            issues: Результаты поиска из Jira
+            intent: Намерение пользователя с параметрами
+            original_query: Оригинальный запрос
+            user_id: ID пользователя для получения учетных данных
+            
+        Returns:
+            Отформатированный ответ с суммой часов
+        """
+        try:
+            if issues.total == 0:
+                return "📋 По указанным критериям задачи не найдены, поэтому трудозатраты равны 0 часов."
+            
+            # Получаем учетные данные для доступа к worklog
+            async with cache_service as cache:
+                credentials = await cache.get_cached_user_credentials(user_id)
+                
+            if not credentials:
+                return "❌ Для получения данных о трудозатратах необходимо авторизоваться в Jira."
+            
+            # Агрегируем трудозатраты
+            total_seconds = 0
+            user_time = {}
+            task_count = 0
+            
+            # Определяем фильтр по пользователю из намерения
+            target_assignee = intent.get("parameters", {}).get("assignee")
+            
+            async with jira_service as jira:
+                for issue in issues.issues:
+                    try:
+                        # Получаем worklogs для каждой задачи
+                        worklogs = await jira.get_worklogs(
+                            issue.key,
+                            credentials['username'],
+                            token=credentials['password']
+                        )
+                        
+                        for worklog in worklogs:
+                            # Если указан конкретный пользователь, фильтруем по нему
+                            if target_assignee:
+                                # Проверяем различные варианты сравнения имени
+                                author_name = worklog.author.lower()
+                                target_name = target_assignee.lower()
+                                
+                                # Точное совпадение или содержание имени
+                                if (target_name not in author_name and 
+                                    author_name not in target_name and
+                                    not any(part in author_name for part in target_name.split())):
+                                    continue
+                            
+                            # Добавляем время к общей сумме
+                            total_seconds += worklog.time_spent_seconds
+                            
+                            # Агрегируем по пользователям для статистики
+                            if worklog.author not in user_time:
+                                user_time[worklog.author] = 0
+                            user_time[worklog.author] += worklog.time_spent_seconds
+                        
+                        task_count += 1
+                        
+                    except Exception as e:
+                        logger.warning(f"Ошибка получения worklogs для {issue.key}: {e}")
+                        continue
+            
+            # Конвертируем секунды в часы
+            total_hours = total_seconds / 3600
+            
+            # Формируем ответ в зависимости от параметров запроса
+            assignee_param = intent.get("parameters", {}).get("assignee")
+            time_period = intent.get("parameters", {}).get("time_period", "")
+            project_param = intent.get("parameters", {}).get("project", "")
+            
+            # Основной ответ
+            if total_hours == 0:
+                if assignee_param:
+                    response = f"⏱️ **{assignee_param}** не списывал время"
+                else:
+                    response = f"⏱️ **Время не списывалось**"
+            else:
+                if assignee_param:
+                    response = f"⏱️ **{assignee_param}** списал **{total_hours:.1f} часов**"
+                else:
+                    response = f"⏱️ **Общие трудозатраты: {total_hours:.1f} часов**"
+            
+            # Добавляем контекст
+            context_parts = []
+            if time_period:
+                context_parts.append(f"за {time_period}")
+            if project_param:
+                context_parts.append(f"по проекту {project_param}")
+            elif issues.total > 0:
+                # Определяем проекты из найденных задач
+                projects = set()
+                for issue in issues.issues[:5]:  # берем первые 5 для определения проектов
+                    project_key = issue.key.split('-')[0]
+                    projects.add(project_key)
+                if len(projects) == 1:
+                    context_parts.append(f"по проекту {list(projects)[0]}")
+                elif len(projects) > 1:
+                    context_parts.append(f"по проектам {', '.join(sorted(projects))}")
+            
+            if context_parts:
+                response += f" {' '.join(context_parts)}"
+            
+            response += f"\n\n📊 **Детализация:**\n"
+            response += f"• Проанализировано задач: {task_count}\n"
+            
+            if len(user_time) > 1 and not assignee_param:
+                # Показываем топ-3 пользователей по времени
+                sorted_users = sorted(user_time.items(), key=lambda x: x[1], reverse=True)[:3]
+                response += f"• Топ исполнителей:\n"
+                for i, (user, seconds) in enumerate(sorted_users, 1):
+                    hours = seconds / 3600
+                    response += f"  {i}. {user}: {hours:.1f} ч\n"
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Ошибка форматирования worklog ответа: {e}")
+            return f"❌ Ошибка при обработке трудозатрат: {str(e)}"
 
 
 # Глобальный экземпляр процессора
