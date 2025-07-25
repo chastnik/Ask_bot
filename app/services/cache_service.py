@@ -595,7 +595,7 @@ class CacheService:
             Словарь со всеми справочниками
         """
         try:
-            dict_types = ["projects", "statuses", "issue_types", "priorities"]
+            dict_types = ["projects", "statuses", "issue_types", "priorities", "users"]
             dictionaries = {}
             
             for dict_type in dict_types:

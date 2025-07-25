@@ -164,7 +164,7 @@ class JiraService:
             # Используем search endpoint для поиска пользователей
             url = urljoin(self.base_url, "/rest/api/2/user/search")
             params = {
-                "query": query,
+                "username": query,  # Jira требует параметр username
                 "maxResults": max_results
             }
             
@@ -192,7 +192,7 @@ class JiraService:
         Ищет пользователя по отображаемому имени
         
         Args:
-            display_name: Отображаемое имя (например "Олег Антонов")
+            display_name: Отображаемое имени (например "Олег Антонов")
             username: Имя пользователя для авторизации
             password: Пароль (опционально)
             token: API токен (опционально)
@@ -201,7 +201,38 @@ class JiraService:
             Информация о пользователе или None
         """
         try:
-            # Сначала ищем по полному имени
+            # Сначала пытаемся найти в кэшированном справочнике пользователей
+            from app.services.cache_service import cache_service
+            
+            # Получаем user_id для доступа к кэшу (используем username как user_id)
+            async with cache_service as cache:
+                cached_users = await cache.get_jira_dictionary("users", username)
+                
+            # Ищем в кэшированных пользователях
+            if cached_users:
+                # Точное совпадение по displayName
+                for user in cached_users:
+                    if user.get("displayName", "").lower() == display_name.lower():
+                        logger.info(f"Найден пользователь в кэше: {display_name} → {user.get('name', 'N/A')}")
+                        return user
+                
+                # Частичное совпадение
+                for user in cached_users:
+                    if display_name.lower() in user.get("displayName", "").lower():
+                        logger.info(f"Найдено частичное совпадение в кэше: {display_name} → {user.get('displayName')} ({user.get('name', 'N/A')})")
+                        return user
+                
+                # Поиск по частям имени в кэше
+                name_parts = display_name.split()
+                if len(name_parts) >= 2:
+                    for user in cached_users:
+                        user_display = user.get("displayName", "").lower()
+                        if all(part.lower() in user_display for part in name_parts):
+                            logger.info(f"Найден пользователь в кэше по частям имени: {display_name} → {user.get('displayName')} ({user.get('name', 'N/A')})")
+                            return user
+            
+            # Если не найден в кэше, делаем API запрос
+            logger.info(f"Пользователь не найден в кэше, ищем через API: {display_name}")
             users = await self.search_users(display_name, username, password, token)
             
             # Ищем точное совпадение по displayName
@@ -733,6 +764,55 @@ class JiraService:
             logger.error(f"Неожиданная ошибка при получении приоритетов: {e}")
             raise JiraAPIError(f"Неожиданная ошибка: {e}")
 
+    async def get_users(self, username: str, password: Optional[str] = None,
+                       token: Optional[str] = None, max_results: int = 1000) -> List[Dict[str, Any]]:
+        """
+        Получает список всех пользователей из Jira
+        
+        Args:
+            username: Имя пользователя для авторизации
+            password: Пароль (опционально)
+            token: API токен (опционально)
+            max_results: Максимальное количество результатов
+            
+        Returns:
+            Список пользователей
+        """
+        try:
+            headers = {"Content-Type": "application/json"}
+            
+            if token:
+                headers.update(self._get_auth_header(username, token))
+            elif password:
+                headers.update(self._get_auth_header(username, password))
+            else:
+                raise JiraAuthError("Не указан пароль или токен")
+            
+            # Используем поиск с пустым запросом для получения всех пользователей
+            url = urljoin(self.base_url, "/rest/api/2/user/search")
+            params = {
+                "username": ".",  # Ищем всех пользователей с точкой в имени (обычно все)
+                "maxResults": max_results
+            }
+            
+            async with self.session.get(url, headers=headers, params=params) as response:
+                if response.status == 200:
+                    users = await response.json()
+                    logger.info(f"Получено пользователей: {len(users)}")
+                    return users
+                elif response.status == 401:
+                    raise JiraAuthError("Неавторизованный доступ к Jira")
+                else:
+                    error_text = await response.text()
+                    logger.warning(f"Не удалось получить список пользователей: {response.status} - {error_text}")
+                    return []
+                    
+        except (JiraAuthError):
+            raise
+        except Exception as e:
+            logger.error(f"Ошибка получения пользователей: {e}")
+            raise JiraAPIError(f"Ошибка получения пользователей: {e}")
+
     async def get_all_dictionaries(self, username: str, password: Optional[str] = None, 
                                   token: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
         """Получает все справочники Jira одним запросом"""
@@ -746,11 +826,12 @@ class JiraService:
                 self.get_statuses(username, password, token),
                 self.get_issue_types(username, password, token),
                 self.get_priorities(username, password, token),
+                self.get_users(username, password, token),
                 return_exceptions=True
             )
             
             # Обрабатываем результаты
-            dict_names = ["projects", "statuses", "issue_types", "priorities"]
+            dict_names = ["projects", "statuses", "issue_types", "priorities", "users"]
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     logger.warning(f"Ошибка получения {dict_names[i]}: {result}")
