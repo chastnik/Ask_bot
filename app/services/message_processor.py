@@ -53,6 +53,28 @@ class MessageProcessor:
         issue_link = f"{jira_base_url}/browse/{issue_key}"
         return f"[**{issue_key}**]({issue_link})"
     
+    async def _return_with_context(
+        self, 
+        user_id: str, 
+        query: str, 
+        intent: Dict[str, Any], 
+        response: str, 
+        chart_file_path: Optional[str] = None
+    ) -> tuple[str, Optional[str]]:
+        """Возвращает ответ с сохранением контекста беседы"""
+        try:
+            await self._save_conversation_context(
+                user_id=user_id,
+                query=query,
+                intent=intent,
+                response=response,
+                entities=intent.get("parameters", {})
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось сохранить контекст беседы: {e}")
+        
+        return response, chart_file_path
+    
     async def _enrich_query_with_context(self, user_id: str, query: str, channel_id: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
         """Обогащает запрос контекстом предыдущих сообщений"""
         try:
@@ -423,7 +445,8 @@ class MessageProcessor:
                     # Извлекаем assignee из параметров intent
                     assignee_name = intent.get("parameters", {}).get("assignee")
                     if not assignee_name:
-                        return "❌ Не удалось определить пользователя для подсчета трудозатрат.", None
+                        error_response = "❌ Не удалось определить пользователя для подсчета трудозатрат."
+                        return await self._return_with_context(user_id, query, intent, error_response)
                     
                     # Ищем пользователя в Jira по имени
                     try:
@@ -436,12 +459,14 @@ class MessageProcessor:
                             )
                             
                         if not user_info:
-                            return f"❌ Пользователь '{assignee_name}' не найден в Jira.\n\nПопробуйте уточнить: 'Рулев это сотрудник'", None
+                            error_response = f"❌ Пользователь '{assignee_name}' не найден в Jira.\n\nПопробуйте уточнить: 'Рулев это сотрудник'"
+                            return await self._return_with_context(user_id, query, intent, error_response)
                             
                         # Используем accountId если доступен, иначе name
                         jira_username = user_info.get('accountId') or user_info.get('name')
                         if not jira_username:
-                            return f"❌ Не удалось определить ID пользователя '{assignee_name}' в Jira.", None
+                            error_response = f"❌ Не удалось определить ID пользователя '{assignee_name}' в Jira."
+                            return await self._return_with_context(user_id, query, intent, error_response)
                             
                         logger.info(f"Найден пользователь: {assignee_name} → {user_info.get('displayName')} ({jira_username})")
                         
@@ -456,7 +481,8 @@ class MessageProcessor:
                             jql = f"assignee = \"{jira_username}\" OR assignee was \"{jira_username}\""
                         
                     except (JiraAuthError, JiraAPIError) as e:
-                        return f"❌ Ошибка поиска пользователя в Jira: {str(e)}", None
+                        error_response = f"❌ Ошибка поиска пользователя в Jira: {str(e)}"
+                        return await self._return_with_context(user_id, query, intent, error_response)
                     
                     # Добавляем временной фильтр если указан
                     time_period = intent.get("parameters", {}).get("time_period") or intent.get("parameters", {}).get("date_range")
@@ -508,7 +534,8 @@ class MessageProcessor:
                     
             except Exception as e:
                 logger.error(f"Ошибка генерации JQL: {e}")
-                return f"❌ Не удалось понять запрос: {str(e)}", None
+                error_response = f"❌ Не удалось понять запрос: {str(e)}"
+                return await self._return_with_context(user_id, query, intent, error_response)
             
             # Выполняем запрос к Jira
             try:
@@ -526,9 +553,11 @@ class MessageProcessor:
                 # Удаляем недействительные учетные данные
                 async with cache_service as cache:
                     await cache.invalidate_user_cache(user_id)
-                return "❌ Ошибка авторизации в Jira. Необходимо повторить авторизацию.", None
+                error_response = "❌ Ошибка авторизации в Jira. Необходимо повторить авторизацию."
+                return await self._return_with_context(user_id, query, intent, error_response)
             except JiraAPIError as e:
-                return f"❌ Ошибка Jira API: {str(e)}", None
+                error_response = f"❌ Ошибка Jira API: {str(e)}"
+                return await self._return_with_context(user_id, query, intent, error_response)
 
             # Проверяем намерение для специальной обработки пустых результатов
             if not issues or not issues.issues:
@@ -537,9 +566,14 @@ class MessageProcessor:
                     # Для аналитических запросов формируем специальный ответ даже при 0 результатах
                     empty_issues = type('EmptyIssues', (), {'total': 0, 'issues': []})()
                     response_text = await self._format_analytics_response(empty_issues, intent, query)
-                    return response_text, None
+                    return await self._return_with_context(user_id, query, intent, response_text)
+                elif intent_type == "worklog":
+                    # Для worklog запросов тоже формируем ответ
+                    response_text = "📋 По указанным критериям задачи не найдены, поэтому трудозатраты равны 0 часов."
+                    return await self._return_with_context(user_id, query, intent, response_text)
                 else:
-                    return "📋 По вашему запросу задачи не найдены.", None
+                    response_text = "📋 По вашему запросу задачи не найдены."
+                    return await self._return_with_context(user_id, query, intent, response_text)
 
             # Создаем график если запрошен
             chart_file_path = None
@@ -619,24 +653,18 @@ class MessageProcessor:
                 if issues.total > 10:
                     response_text += f"... и еще {issues.total - 10} задач(и)"
 
-            # Сохраняем контекст беседы
-            try:
-                await self._save_conversation_context(
-                    user_id=user_id,
-                    query=query,
-                    intent=intent,
-                    response=response_text,
-                    entities=intent.get("parameters", {})
-                )
-            except Exception as e:
-                logger.warning(f"Не удалось сохранить контекст беседы: {e}")
-            
-            # Возвращаем текст и путь к файлу графика
-            return response_text, chart_file_path
+            # Возвращаем текст и путь к файлу графика с сохранением контекста
+            return await self._return_with_context(user_id, query, intent, response_text, chart_file_path)
                 
         except Exception as e:
             logger.error(f"Ошибка обработки запроса от {user_id}: {e}")
-            return f"❌ Произошла ошибка при обработке запроса: {str(e)}", None
+            error_response = f"❌ Произошла ошибка при обработке запроса: {str(e)}"
+            # Пытаемся сохранить контекст даже при общей ошибке
+            try:
+                intent = intent if 'intent' in locals() else {"intent": "unknown", "parameters": {}}
+                return await self._return_with_context(user_id, query, intent, error_response)
+            except:
+                return error_response, None
 
     async def _refresh_jira_dictionaries(self, user_id: str) -> bool:
         """
