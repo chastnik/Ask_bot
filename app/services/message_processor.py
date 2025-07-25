@@ -461,17 +461,24 @@ class MessageProcessor:
                     # Добавляем временной фильтр если указан
                     time_period = intent.get("parameters", {}).get("time_period") or intent.get("parameters", {}).get("date_range")
                     if time_period:
-                        # Простое определение месяца для JQL
+                        # Определение месяца для JQL с правильным количеством дней
                         month_mapping = {
-                            "январь": "01", "февраль": "02", "март": "03", "апрель": "04",
-                            "май": "05", "июнь": "06", "июль": "07", "август": "08",
-                            "сентябрь": "09", "октябрь": "10", "ноябрь": "11", "декабрь": "12"
+                            "январь": ("01", "31"), "февраль": ("02", "28"), "март": ("03", "31"), 
+                            "апрель": ("04", "30"), "май": ("05", "31"), "июнь": ("06", "30"),
+                            "июль": ("07", "31"), "август": ("08", "31"), "сентябрь": ("09", "30"),
+                            "октябрь": ("10", "31"), "ноябрь": ("11", "30"), "декабрь": ("12", "31")
                         }
                         
                         current_year = "2024"  # Можно сделать динамическим
-                        for month_ru, month_num in month_mapping.items():
+                        for month_ru, (month_num, last_day) in month_mapping.items():
                             if month_ru in time_period.lower():
-                                jql += f" AND worklogDate >= \"{current_year}-{month_num}-01\" AND worklogDate <= \"{current_year}-{month_num}-31\""
+                                # Для февраля учитываем високосный год
+                                if month_num == "02":
+                                    import calendar
+                                    if calendar.isleap(int(current_year)):
+                                        last_day = "29"
+                                
+                                jql += f" AND worklogDate >= \"{current_year}-{month_num}-01\" AND worklogDate <= \"{current_year}-{month_num}-{last_day}\""
                                 break
                 
                 else:
