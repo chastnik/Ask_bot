@@ -56,7 +56,9 @@ class MessageProcessor:
     async def _enrich_query_with_context(self, user_id: str, query: str, channel_id: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
         """Обогащает запрос контекстом предыдущих сообщений"""
         try:
-            engine = create_async_engine(settings.database_url)
+            # Заменяем sqlite:// на sqlite+aiosqlite:// для async поддержки
+            database_url = settings.database_url.replace("sqlite://", "sqlite+aiosqlite://")
+            engine = create_async_engine(database_url)
             async with AsyncSession(engine) as db_session:
                 conv_service = await get_conversation_service(db_session)
                 return await conv_service.enrich_query_with_context(user_id, query, channel_id)
@@ -78,7 +80,9 @@ class MessageProcessor:
     ) -> bool:
         """Сохраняет контекст беседы"""
         try:
-            engine = create_async_engine(settings.database_url)
+            # Заменяем sqlite:// на sqlite+aiosqlite:// для async поддержки
+            database_url = settings.database_url.replace("sqlite://", "sqlite+aiosqlite://")
+            engine = create_async_engine(database_url)
             async with AsyncSession(engine) as db_session:
                 conv_service = await get_conversation_service(db_session)
                 return await conv_service.save_context(user_id, query, intent, response, entities, channel_id)
@@ -417,15 +421,45 @@ class MessageProcessor:
                     logger.info(f"Обрабатываем worklog запрос: {intent}")
                     
                     # Извлекаем assignee из параметров intent
-                    assignee = intent.get("parameters", {}).get("assignee")
-                    if not assignee:
+                    assignee_name = intent.get("parameters", {}).get("assignee")
+                    if not assignee_name:
                         return "❌ Не удалось определить пользователя для подсчета трудозатрат.", None
                     
-                    # Генерируем JQL для поиска задач пользователя
-                    jql = f"assignee = \"{assignee}\" OR assignee was \"{assignee}\""
+                    # Ищем пользователя в Jira по имени
+                    try:
+                        async with jira_service as jira:
+                            user_info = await jira.find_user_by_display_name(
+                                assignee_name, 
+                                credentials['username'], 
+                                credentials.get('password'), 
+                                credentials.get('token')
+                            )
+                            
+                        if not user_info:
+                            return f"❌ Пользователь '{assignee_name}' не найден в Jira.\n\nПопробуйте уточнить: 'Рулев это сотрудник'", None
+                            
+                        # Используем accountId если доступен, иначе name
+                        jira_username = user_info.get('accountId') or user_info.get('name')
+                        if not jira_username:
+                            return f"❌ Не удалось определить ID пользователя '{assignee_name}' в Jira.", None
+                            
+                        logger.info(f"Найден пользователь: {assignee_name} → {user_info.get('displayName')} ({jira_username})")
+                        
+                        # Сохраняем информацию о найденном пользователе в intent для дальнейшего использования
+                        intent["parameters"]["jira_user_info"] = user_info
+                        intent["parameters"]["jira_username"] = jira_username
+                        
+                        # Генерируем JQL для поиска задач пользователя
+                        if user_info.get('accountId'):
+                            jql = f"assignee = \"{jira_username}\" OR assignee was \"{jira_username}\""
+                        else:
+                            jql = f"assignee = \"{jira_username}\" OR assignee was \"{jira_username}\""
+                        
+                    except (JiraAuthError, JiraAPIError) as e:
+                        return f"❌ Ошибка поиска пользователя в Jira: {str(e)}", None
                     
                     # Добавляем временной фильтр если указан
-                    time_period = intent.get("parameters", {}).get("time_period")
+                    time_period = intent.get("parameters", {}).get("time_period") or intent.get("parameters", {}).get("date_range")
                     if time_period:
                         # Простое определение месяца для JQL
                         month_mapping = {
@@ -1003,6 +1037,8 @@ class MessageProcessor:
             
             # Определяем фильтр по пользователю из намерения
             target_assignee = intent.get("parameters", {}).get("assignee")
+            jira_username = intent.get("parameters", {}).get("jira_username")
+            jira_user_info = intent.get("parameters", {}).get("jira_user_info", {})
             
             async with jira_service as jira:
                 for issue in issues.issues:
@@ -1016,16 +1052,21 @@ class MessageProcessor:
                         
                         for worklog in worklogs:
                             # Если указан конкретный пользователь, фильтруем по нему
-                            if target_assignee:
-                                # Проверяем различные варианты сравнения имени
-                                author_name = worklog.author.lower()
-                                target_name = target_assignee.lower()
+                            if target_assignee and jira_username:
+                                # Используем точное сравнение с jira_username (accountId или name)
+                                worklog_author_id = getattr(worklog, 'accountId', None) or getattr(worklog, 'name', None) or worklog.author
                                 
-                                # Точное совпадение или содержание имени
-                                if (target_name not in author_name and 
-                                    author_name not in target_name and
-                                    not any(part in author_name for part in target_name.split())):
-                                    continue
+                                # Точное совпадение по ID/username
+                                if worklog_author_id != jira_username:
+                                    # Если нет точного совпадения, попробуем сравнить по displayName
+                                    jira_display_name = jira_user_info.get('displayName', '').lower()
+                                    worklog_author_name = worklog.author.lower()
+                                    
+                                    # Проверяем точное или частичное совпадение displayName
+                                    if (jira_display_name not in worklog_author_name and 
+                                        worklog_author_name not in jira_display_name and
+                                        not any(part in worklog_author_name for part in jira_display_name.split())):
+                                        continue
                             
                             # Добавляем время к общей сумме
                             total_seconds += worklog.time_spent_seconds

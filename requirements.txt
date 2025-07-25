@@ -8,6 +8,7 @@ pydantic-settings>=2.4.0
 aiohttp>=3.10.0
 websockets>=12.0  # Для WebSocket подключения к Mattermost
 python-socks>=2.7.0  # For SOCKS proxy support in WebSocket
+aiosqlite>=0.21.0  # Async SQLite driver for conversation context
 
 # База данных и ORM
 sqlalchemy>=2.0.30
