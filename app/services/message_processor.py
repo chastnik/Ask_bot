@@ -11,6 +11,7 @@ from app.services.llm_service import llm_service
 from app.services.cache_service import cache_service
 from app.services.mattermost_service import mattermost_service
 from app.services.chart_service import chart_service
+from app.config import settings
 
 
 class MessageProcessor:
@@ -35,6 +36,20 @@ class MessageProcessor:
             'обновить': self._handle_refresh_dictionaries,
             'refresh': self._handle_refresh_dictionaries,
         }
+    
+    def _format_issue_link(self, issue_key: str) -> str:
+        """
+        Форматирует ссылку на задачу в Jira
+        
+        Args:
+            issue_key: Ключ задачи (например, PROJECT-123)
+            
+        Returns:
+            Отформатированная Markdown ссылка
+        """
+        jira_base_url = settings.jira_base_url.rstrip('/')
+        issue_link = f"{jira_base_url}/browse/{issue_key}"
+        return f"[**{issue_key}**]({issue_link})"
     
     async def process_message(self, user_id: str, message: str) -> str:
         """
@@ -460,9 +475,11 @@ class MessageProcessor:
             else:
                 # Формируем стандартный текстовый ответ со списком
                 response_text = f"📋 **Найдено задач:** {issues.total}\n\n"
-
+                
                 for issue in issues.issues[:10]:  # Показываем до 10 задач
-                    response_text += f"• **{issue.key}** - {issue.summary}\n"
+                    # Формируем ссылку на задачу
+                    issue_link = self._format_issue_link(issue.key)
+                    response_text += f"• {issue_link} - {issue.summary}\n"
                     response_text += f"  Статус: {issue.status}\n\n"
 
                 if issues.total > 10:
@@ -782,8 +799,11 @@ class MessageProcessor:
             response += "Найдена 1 задача по вашим критериям."
         elif total <= 5:
             response += f"Найдено {total} задачи. Вот они:\n\n"
+            
             for issue in issues.issues:
-                response += f"• **{issue.key}** - {issue.summary}\n"
+                # Формируем ссылку на задачу
+                issue_link = self._format_issue_link(issue.key)
+                response += f"• {issue_link} - {issue.summary}\n"
         else:
             response += f"📈 **Краткая сводка:**\n"
             # Группируем по статусам для краткой сводки
