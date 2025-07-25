@@ -1,4 +1,4 @@
-# 🤖 Ask Bot - Интеллектуальный помощник для Jira
+# 🤖 Ask Bot - Интеллектуальный помощник для Jira (БИТ.Цифра)
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.108+-green.svg)](https://fastapi.tiangolo.com/)
@@ -742,8 +742,7 @@ python scripts/check-config.py
 
 ## 👥 Команда
 
-- **Разработка** - Основная команда разработки
-- **Поддержка** - [Создать issue](https://github.com/your-org/ask-bot/issues)
+- **Разработка** - Стас Чашин
 
 ## 🔗 Полезные ссылки
 
@@ -757,8 +756,6 @@ python scripts/check-config.py
 
 <div align="center">
 
-**Ask Bot** - Делаем работу с Jira простой и интеллектуальной! 🚀
-
-[⭐ Поставьте звезду](https://github.com/your-org/ask-bot) | [🐛 Сообщить об ошибке](https://github.com/your-org/ask-bot/issues) | [💡 Предложить улучшение](https://github.com/your-org/ask-bot/issues)
+**BIT.Digital Ask Bot** - Делаем работу с Jira простой и интеллектуальной! 🚀
 
 </div> 
