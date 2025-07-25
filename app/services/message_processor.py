@@ -13,8 +13,7 @@ from app.services.mattermost_service import mattermost_service
 from app.services.chart_service import chart_service
 from app.services.conversation_service import get_conversation_service
 from app.config import settings
-from app.models.database import engine
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 
 class MessageProcessor:
@@ -57,12 +56,16 @@ class MessageProcessor:
     async def _enrich_query_with_context(self, user_id: str, query: str, channel_id: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
         """Обогащает запрос контекстом предыдущих сообщений"""
         try:
+            engine = create_async_engine(settings.database_url)
             async with AsyncSession(engine) as db_session:
                 conv_service = await get_conversation_service(db_session)
                 return await conv_service.enrich_query_with_context(user_id, query, channel_id)
         except Exception as e:
             logger.error(f"Ошибка обогащения контекста: {e}")
             return query, {}
+        finally:
+            if 'engine' in locals():
+                await engine.dispose()
     
     async def _save_conversation_context(
         self, 
@@ -75,12 +78,16 @@ class MessageProcessor:
     ) -> bool:
         """Сохраняет контекст беседы"""
         try:
+            engine = create_async_engine(settings.database_url)
             async with AsyncSession(engine) as db_session:
                 conv_service = await get_conversation_service(db_session)
                 return await conv_service.save_context(user_id, query, intent, response, entities, channel_id)
         except Exception as e:
             logger.error(f"Ошибка сохранения контекста: {e}")
             return False
+        finally:
+            if 'engine' in locals():
+                await engine.dispose()
     
     async def process_message(self, user_id: str, message: str) -> str:
         """
