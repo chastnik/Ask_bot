@@ -58,7 +58,7 @@ class MessageProcessor:
             message = message.strip()
             
             if not message:
-                return ""
+                return "", None
             
             # Проверяем, является ли сообщение командой
             command_result = await self._try_handle_command(user_id, message)

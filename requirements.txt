@@ -7,6 +7,7 @@ pydantic-settings>=2.4.0
 # HTTP клиент для внешних API (Mattermost, Jira, LLM)
 aiohttp>=3.10.0
 websockets>=12.0  # Для WebSocket подключения к Mattermost
+python-socks>=2.7.0  # For SOCKS proxy support in WebSocket
 
 # База данных и ORM
 sqlalchemy>=2.0.30
