@@ -321,11 +321,11 @@ class LLMService:
 - "линейный график", "линейная диаграмма", "line chart" → chart_type: "line"
 
 ПРАВИЛА ОПРЕДЕЛЕНИЯ ГРУППИРОВКИ:
-- "в разрезе проектов", "по проектам" → group_by: "project"
-- "в разрезе статусов", "по статусам" → group_by: "status"
-- "по приоритетам", "в разрезе приоритетов" → group_by: "priority"
-- "по исполнителям", "в разрезе исполнителей" → group_by: "assignee"
-- "по типам задач", "в разрезе типов" → group_by: "issue_type"
+- "в разрезе проектов", "по проектам", "группируй по проектам", "группировка по проектам" → group_by: "project"
+- "в разрезе статусов", "по статусам", "группируй по статусам", "группировка по статусам" → group_by: "status"  
+- "по приоритетам", "в разрезе приоритетов", "группируй по приоритетам", "группировка по приоритетам" → group_by: "priority"
+- "по исполнителям", "в разрезе исполнителей", "группируй по исполнителям", "группировка по исполнителям" → group_by: "assignee"
+- "по типам задач", "в разрезе типов", "группируй по типам", "группировка по типам" → group_by: "issue_type"
 
 Примеры:
 Вход: "покажи количество открытых задач в разрезе проектов в виде круговой диаграммы"
@@ -836,9 +836,50 @@ class LLMService:
             "график", "диаграмма", "chart", "покажи", "визуал"
         ])
         
+        # Определяем группировку
+        parameters = {}
+        
+        if any(phrase in question_lower for phrase in [
+            "по проектам", "группируй по проектам", "группировка по проектам", 
+            "в разрезе проектов", "разбить по проектам"
+        ]):
+            parameters["group_by"] = "project"
+        elif any(phrase in question_lower for phrase in [
+            "по статусам", "группируй по статусам", "группировка по статусам",
+            "в разрезе статусов", "разбить по статусам"  
+        ]):
+            parameters["group_by"] = "status"
+        elif any(phrase in question_lower for phrase in [
+            "по приоритетам", "группируй по приоритетам", "группировка по приоритетам",
+            "в разрезе приоритетов", "разбить по приоритетам"
+        ]):
+            parameters["group_by"] = "priority" 
+        elif any(phrase in question_lower for phrase in [
+            "по исполнителям", "группируй по исполнителям", "группировка по исполнителям",
+            "в разрезе исполнителей", "разбить по исполнителям"
+        ]):
+            parameters["group_by"] = "assignee"
+        elif any(phrase in question_lower for phrase in [
+            "по типам", "группируй по типам", "группировка по типам",
+            "в разрезе типов", "разбить по типам", "по типам задач"
+        ]):
+            parameters["group_by"] = "issue_type"
+        
+        # Определяем тип графика
+        if any(phrase in question_lower for phrase in [
+            "круговая", "круговой", "pie", "пирог"
+        ]):
+            parameters["chart_type"] = "pie"
+        elif any(phrase in question_lower for phrase in [
+            "линейный", "линейная", "line", "динамика"
+        ]):
+            parameters["chart_type"] = "line"
+        else:
+            parameters["chart_type"] = "bar"  # по умолчанию столбчатая
+        
         return {
             "intent": intent,
-            "parameters": {},
+            "parameters": parameters,
             "needs_chart": needs_chart
         }
     
