@@ -295,7 +295,7 @@ class MessageProcessor:
 `авторизация [логин] [пароль/токен]`
 
 Пример: `авторизация user@company.com mytoken`
-"""
+""", None
 
             # Анализируем запрос с помощью LLM
             try:
