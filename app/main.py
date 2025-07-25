@@ -50,12 +50,32 @@ async def handle_websocket_message(message_info: Dict[str, Any]):
         logger.info(f"📥 Обработка сообщения от {user_id}: {message_text}")
         
         # Обрабатываем сообщение через процессор
-        response = await message_processor.process_message(user_id, message_text)
+        response_text, chart_file_path = await message_processor.process_message_with_files(user_id, message_text)
         
-        if response:
+        if response_text:
             # Отправляем ответ пользователю
             async with mattermost_service as mm:
-                success = await mm.send_direct_message(user_id, response)
+                if chart_file_path:
+                    # Отправляем сообщение с графиком как HTML файл
+                    import os
+                    with open(chart_file_path, 'rb') as f:
+                        file_data = f.read()
+                    
+                    filename = os.path.basename(chart_file_path)
+                    
+                    # Создаем канал прямых сообщений и отправляем файл
+                    channel_data = await mm.create_direct_message_channel(user_id)
+                    if channel_data and channel_data.get("id"):
+                        channel_id = channel_data["id"]
+                        success = await mm.create_post_with_file(
+                            channel_id, response_text, file_data, filename, "text/html"
+                        )
+                    else:
+                        # Fallback - отправляем только текст
+                        success = await mm.send_direct_message(user_id, response_text)
+                else:
+                    # Отправляем только текст
+                    success = await mm.send_direct_message(user_id, response_text)
                 
             if success:
                 logger.info(f"📤 Ответ отправлен пользователю {user_id}")

@@ -38,6 +38,13 @@ class MessageProcessor:
     
     async def process_message(self, user_id: str, message: str) -> str:
         """
+        Обрабатывает сообщение от пользователя (только текст)
+        """
+        response_text, _ = await self.process_message_with_files(user_id, message)
+        return response_text
+
+    async def process_message_with_files(self, user_id: str, message: str) -> tuple[str, Optional[str]]:
+        """
         Обрабатывает сообщение от пользователя
         
         Args:
@@ -56,14 +63,14 @@ class MessageProcessor:
             # Проверяем, является ли сообщение командой
             command_result = await self._try_handle_command(user_id, message)
             if command_result:
-                return command_result
+                return command_result, None
             
             # Если не команда, обрабатываем как запрос к Jira
             return await self._handle_jira_query(user_id, message)
             
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения от {user_id}: {e}")
-            return f"❌ Произошла ошибка при обработке запроса: {str(e)}"
+            return f"❌ Произошла ошибка при обработке запроса: {str(e)}", None
     
     async def _try_handle_command(self, user_id: str, message: str) -> Optional[str]:
         """Пытается обработать сообщение как команду"""
@@ -273,7 +280,7 @@ class MessageProcessor:
 • `кеш статистика` - показать статистику кеша
 """
     
-    async def _handle_jira_query(self, user_id: str, query: str) -> str:
+    async def _handle_jira_query(self, user_id: str, query: str) -> tuple[str, Optional[str]]:
         """Обработка запроса к Jira"""
         try:
             # Получаем учетные данные пользователя из кеша
@@ -346,14 +353,16 @@ class MessageProcessor:
                 # Проверяем, нужно ли уточнить маппинг
                 if jql and jql.startswith("UNKNOWN_CLIENT:"):
                     client_name = jql.replace("UNKNOWN_CLIENT:", "")
-                    return await self._ask_for_client_mapping(user_id, client_name)
+                    response = await self._ask_for_client_mapping(user_id, client_name)
+                    return response, None
                 elif jql and jql.startswith("UNKNOWN_USER:"):
                     user_name = jql.replace("UNKNOWN_USER:", "")
-                    return await self._resolve_user_mapping(user_id, user_name, query)
+                    response = await self._resolve_user_mapping(user_id, user_name, query)
+                    return response, None
                     
             except Exception as e:
                 logger.error(f"Ошибка генерации JQL: {e}")
-                return f"❌ Не удалось понять запрос: {str(e)}"
+                return f"❌ Не удалось понять запрос: {str(e)}", None
             
             # Выполняем запрос к Jira
             try:
@@ -362,7 +371,7 @@ class MessageProcessor:
                         jql,
                         credentials['username'],
                         credentials['password'],
-                        max_results=50
+                        max_results=1000  # Увеличиваем лимит для получения всех задач
                     )
                 
                 logger.info(f"Найдено задач: {issues.total if issues else 0}")
@@ -371,67 +380,100 @@ class MessageProcessor:
                 # Удаляем недействительные учетные данные
                 async with cache_service as cache:
                     await cache.invalidate_user_cache(user_id)
-                return "❌ Ошибка авторизации в Jira. Необходимо повторить авторизацию."
+                return "❌ Ошибка авторизации в Jira. Необходимо повторить авторизацию.", None
             except JiraAPIError as e:
-                return f"❌ Ошибка Jira API: {str(e)}"
+                return f"❌ Ошибка Jira API: {str(e)}", None
 
+            # Проверяем намерение для специальной обработки пустых результатов
             if not issues or not issues.issues:
-                return "📋 По вашему запросу задачи не найдены."
+                intent_type = intent.get("intent", "search")
+                if intent_type == "analytics":
+                    # Для аналитических запросов формируем специальный ответ даже при 0 результатах
+                    empty_issues = type('EmptyIssues', (), {'total': 0, 'issues': []})()
+                    response_text = await self._format_analytics_response(empty_issues, intent, query)
+                    return response_text, None
+                else:
+                    return "📋 По вашему запросу задачи не найдены.", None
 
             # Создаем график если запрошен
-            chart_url = None
+            chart_file_path = None
             if intent.get("needs_chart", False):
                 try:
-                    # Конвертируем задачи в данные для графика
-                    # Группируем по статусам и считаем количество
-                    status_count = {}
-                    for issue in issues.issues:
-                        status = issue.status
-                        status_count[status] = status_count.get(status, 0) + 1
+                    # Определяем параметры группировки
+                    group_by = intent.get("parameters", {}).get("group_by", "status")
+                    chart_type = intent.get("parameters", {}).get("chart_type", "bar")
                     
+                    # Группируем задачи по выбранному полю
+                    group_count = {}
+                    group_label = "статусам"  # по умолчанию
+                    
+                    for issue in issues.issues:
+                        if group_by == "project":
+                            key = getattr(issue, 'project_key', issue.key.split('-')[0])
+                            group_label = "проектам"
+                        elif group_by == "priority":
+                            key = getattr(issue, 'priority', 'Не указан')
+                            group_label = "приоритетам"
+                        elif group_by == "assignee":
+                            key = getattr(issue, 'assignee', 'Не назначен')
+                            group_label = "исполнителям"
+                        elif group_by == "issue_type":
+                            key = getattr(issue, 'issue_type', 'Неизвестный тип')
+                            group_label = "типам задач"
+                        else:  # по умолчанию status
+                            key = issue.status
+                            group_label = "статусам"
+                        
+                        group_count[key] = group_count.get(key, 0) + 1
+                    
+                    # Подготавливаем данные для графика
                     chart_data = []
-                    for status, count in status_count.items():
+                    for name, count in group_count.items():
                         chart_data.append({
-                            'name': status,
+                            'name': name,
                             'value': count,
-                            'category': status
+                            'category': name
                         })
                     
-                    # Определяем тип графика
-                    chart_type = intent.get("parameters", {}).get("chart_type", "bar")
+                    # Создаем заголовок
+                    chart_title = f"Распределение по {group_label}"
                     
                     # Создаем график в зависимости от типа
                     if chart_type == "pie":
-                        chart_url = await chart_service.create_pie_chart(chart_data, "Распределение по статусам")
+                        chart_file_path = await chart_service.create_pie_chart(chart_data, chart_title, "value", "name")
                     elif chart_type == "line":
-                        chart_url = await chart_service.create_line_chart(chart_data, "Динамика задач", "name", "value")
+                        chart_file_path = await chart_service.create_line_chart(chart_data, chart_title, "name", "value")
                     else:  # по умолчанию столбчатый график
-                        chart_url = await chart_service.create_bar_chart(chart_data, "Статистика по статусам", "name", "value")
-                    logger.info(f"Создан график: {chart_url}")
+                        chart_file_path = await chart_service.create_bar_chart(chart_data, chart_title, "name", "value")
+                    logger.info(f"Создан график: {chart_file_path}")
                     
                 except Exception as e:
                     logger.error(f"Ошибка создания графика: {e}")
                     # Продолжаем без графика
 
-            # Формируем текстовый ответ
-            response_text = f"📋 **Найдено задач:** {issues.total}\n\n"
+            # Проверяем намерение для специальной обработки аналитических запросов
+            intent_type = intent.get("intent", "search")
+            
+            if intent_type == "analytics":
+                # Формируем аналитический ответ
+                response_text = await self._format_analytics_response(issues, intent, query)
+            else:
+                # Формируем стандартный текстовый ответ со списком
+                response_text = f"📋 **Найдено задач:** {issues.total}\n\n"
 
-            for issue in issues.issues[:10]:  # Показываем до 10 задач
-                response_text += f"• **{issue.key}** - {issue.summary}\n"
-                response_text += f"  Статус: {issue.status}\n\n"
+                for issue in issues.issues[:10]:  # Показываем до 10 задач
+                    response_text += f"• **{issue.key}** - {issue.summary}\n"
+                    response_text += f"  Статус: {issue.status}\n\n"
 
-            if issues.total > 10:
-                response_text += f"... и еще {issues.total - 10} задач(и)"
+                if issues.total > 10:
+                    response_text += f"... и еще {issues.total - 10} задач(и)"
 
-            # Добавляем ссылку на график если он создан
-            if chart_url:
-                response_text += f"\n\n📊 **График:** [Открыть визуализацию]({chart_url})"
-
-            return response_text
+            # Возвращаем текст и путь к файлу графика
+            return response_text, chart_file_path
                 
         except Exception as e:
             logger.error(f"Ошибка обработки запроса от {user_id}: {e}")
-            return f"❌ Произошла ошибка при обработке запроса: {str(e)}"
+            return f"❌ Произошла ошибка при обработке запроса: {str(e)}", None
 
     async def _refresh_jira_dictionaries(self, user_id: str) -> bool:
         """
@@ -676,6 +718,135 @@ class MessageProcessor:
         except Exception as e:
             logger.error(f"Ошибка команды обновления справочников: {e}")
             return f"❌ Ошибка обновления справочников: {str(e)}"
+
+    async def _format_analytics_response(self, issues, intent: Dict[str, Any], original_query: str) -> str:
+        """
+        Форматирует аналитический ответ вместо простого списка задач
+        
+        Args:
+            issues: Результаты поиска из Jira
+            intent: Намерение пользователя
+            original_query: Оригинальный запрос
+            
+        Returns:
+            Отформатированный аналитический ответ
+        """
+        try:
+            # Получаем параметры для группировки из намерения
+            group_by = intent.get("parameters", {}).get("group_by", "status")
+            
+            # Если это просто подсчет без группировки
+            if "сколько" in original_query.lower() or "количество" in original_query.lower():
+                return self._format_count_response(issues, original_query)
+            
+            # Группированная аналитика
+            return self._format_grouped_analytics(issues, group_by, original_query)
+            
+        except Exception as e:
+            logger.error(f"Ошибка форматирования аналитического ответа: {e}")
+            # Fallback к стандартному ответу
+            return f"📊 **Найдено:** {issues.total} задач(и)"
+
+    def _format_count_response(self, issues, original_query: str) -> str:
+        """Форматирует ответ для запросов типа 'сколько'"""
+        total = issues.total
+        
+        # Определяем контекст из запроса
+        context_words = []
+        query_lower = original_query.lower()
+        
+        if "баг" in query_lower:
+            context_words.append("багов")
+        elif "задач" in query_lower:
+            context_words.append("задач")
+        
+        if "закрыт" in query_lower:
+            context_words.append("закрытых")
+        elif "открыт" in query_lower:
+            context_words.append("открытых")
+            
+        if "июль" in query_lower or "июн" in query_lower:
+            context_words.append("в июле")
+        elif "неделя" in query_lower:
+            context_words.append("за неделю")
+        elif "сегодня" in query_lower:
+            context_words.append("сегодня")
+            
+        context = " ".join(context_words) if context_words else "задач"
+        
+        response = f"🔢 **Количество {context}:** {total}\n\n"
+        
+        if total == 0:
+            response += "Задачи по указанным критериям не найдены."
+        elif total == 1:
+            response += "Найдена 1 задача по вашим критериям."
+        elif total <= 5:
+            response += f"Найдено {total} задачи. Вот они:\n\n"
+            for issue in issues.issues:
+                response += f"• **{issue.key}** - {issue.summary}\n"
+        else:
+            response += f"📈 **Краткая сводка:**\n"
+            # Группируем по статусам для краткой сводки
+            status_count = {}
+            for issue in issues.issues:
+                status = issue.status
+                status_count[status] = status_count.get(status, 0) + 1
+            
+            for status, count in sorted(status_count.items(), key=lambda x: x[1], reverse=True):
+                response += f"• {status}: {count}\n"
+                
+        return response
+
+    def _format_grouped_analytics(self, issues, group_by: str, original_query: str) -> str:
+        """Форматирует групповую аналитику"""
+        total = issues.total
+        
+        # Группируем данные
+        grouped_data = {}
+        for issue in issues.issues:
+            if group_by == "assignee":
+                key = getattr(issue, 'assignee', 'Не назначен') or 'Не назначен'
+            elif group_by == "project":
+                key = getattr(issue, 'project_key', issue.key.split('-')[0])
+            elif group_by == "priority":
+                key = getattr(issue, 'priority', 'Не указан')
+            elif group_by == "issue_type":
+                key = getattr(issue, 'issue_type', 'Неизвестный тип')
+            else:  # status по умолчанию
+                key = issue.status
+                
+            grouped_data[key] = grouped_data.get(key, 0) + 1
+        
+        # Определяем заголовок группировки
+        group_labels = {
+            "assignee": "исполнителям",
+            "project": "проектам", 
+            "priority": "приоритетам",
+            "issue_type": "типам задач",
+            "status": "статусам"
+        }
+        group_label = group_labels.get(group_by, "категориям")
+        
+        response = f"📊 **Статистика по {group_label}**\n"
+        response += f"Всего задач: {total}\n\n"
+        
+        # Сортируем по количеству (по убыванию)
+        sorted_groups = sorted(grouped_data.items(), key=lambda x: x[1], reverse=True)
+        
+        for i, (name, count) in enumerate(sorted_groups, 1):
+            percentage = (count / total * 100) if total > 0 else 0
+            response += f"{i}. **{name}**: {count} ({percentage:.1f}%)\n"
+            
+        # Добавляем инсайты для топ-групп
+        if len(sorted_groups) > 0:
+            top_group = sorted_groups[0]
+            response += f"\n💡 **Больше всего задач:** {top_group[0]} ({top_group[1]} задач)"
+            
+            if len(sorted_groups) > 1:
+                response += f"\n📈 **Активные {group_label}:** {len(sorted_groups)}"
+                
+        return response
+
 
 # Глобальный экземпляр процессора
 message_processor = MessageProcessor()

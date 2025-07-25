@@ -138,16 +138,15 @@ class ChartService:
             if config.get("show_values", True):
                 fig.update_traces(texttemplate='%{y}', textposition='outside')
             
-            # Сохраняем график
-            filename = self._generate_filename("bar")
+            # Сохраняем график как HTML
+            filename = self._generate_filename("bar", extension="html")
             filepath = os.path.join(self.chart_save_path, filename)
             
-            fig.write_image(filepath, format="png", width=800, height=500)
+            fig.write_html(filepath, include_plotlyjs='cdn')
             
-            chart_url = f"{self.chart_url_prefix}{filename}"
-            logger.info(f"Создан столбчатый график: {chart_url}")
+            logger.info(f"Создан столбчатый график HTML: {filepath}")
             
-            return chart_url
+            return filepath
             
         except Exception as e:
             logger.error(f"Ошибка создания столбчатого графика: {e}")
@@ -211,16 +210,15 @@ class ChartService:
             fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
             fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
             
-            # Сохраняем график
-            filename = self._generate_filename("line")
+            # Сохраняем график как HTML
+            filename = self._generate_filename("line", extension="html")
             filepath = os.path.join(self.chart_save_path, filename)
             
-            fig.write_image(filepath, format="png", width=800, height=500)
+            fig.write_html(filepath, include_plotlyjs='cdn')
             
-            chart_url = f"{self.chart_url_prefix}{filename}"
-            logger.info(f"Создан линейный график: {chart_url}")
+            logger.info(f"Создан линейный график HTML: {filepath}")
             
-            return chart_url
+            return filepath
             
         except Exception as e:
             logger.error(f"Ошибка создания линейного графика: {e}")
@@ -274,16 +272,15 @@ class ChartService:
                 hovertemplate='<b>%{label}</b><br>Значение: %{value}<br>Процент: %{percent}<extra></extra>'
             )
             
-            # Сохраняем график
-            filename = self._generate_filename("pie")
+            # Сохраняем график как HTML
+            filename = self._generate_filename("pie", extension="html")
             filepath = os.path.join(self.chart_save_path, filename)
             
-            fig.write_image(filepath, format="png", width=800, height=500)
+            fig.write_html(filepath, include_plotlyjs='cdn')
             
-            chart_url = f"{self.chart_url_prefix}{filename}"
-            logger.info(f"Создана круговая диаграмма: {chart_url}")
+            logger.info(f"Создана круговая диаграмма HTML: {filepath}")
             
-            return chart_url
+            return filepath
             
         except Exception as e:
             logger.error(f"Ошибка создания круговой диаграммы: {e}")

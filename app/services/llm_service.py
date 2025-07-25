@@ -313,14 +313,38 @@ class LLMService:
 - issue_type: тип задачи (Bug, Task, Epic)
 - status: статус задачи
 - chart_type: тип графика (bar, line, pie)
+- group_by: по чему группировать данные (status, project, priority, assignee, issue_type)
 
-Пример ответа:
-{
+ПРАВИЛА ОПРЕДЕЛЕНИЯ ТИПА ГРАФИКА:
+- "круговая диаграмма", "круговой график", "pie chart" → chart_type: "pie"
+- "столбчатая диаграмма", "столбчатый график", "bar chart" → chart_type: "bar"  
+- "линейный график", "линейная диаграмма", "line chart" → chart_type: "line"
+
+ПРАВИЛА ОПРЕДЕЛЕНИЯ ГРУППИРОВКИ:
+- "в разрезе проектов", "по проектам" → group_by: "project"
+- "в разрезе статусов", "по статусам" → group_by: "status"
+- "по приоритетам", "в разрезе приоритетов" → group_by: "priority"
+- "по исполнителям", "в разрезе исполнителей" → group_by: "assignee"
+- "по типам задач", "в разрезе типов" → group_by: "issue_type"
+
+Примеры:
+Вход: "покажи количество открытых задач в разрезе проектов в виде круговой диаграммы"
+Выход: {
   "intent": "analytics",
   "parameters": {
-    "client": "Иль-Де-Ботэ",
-    "date_range": "июль",
-    "chart_type": "bar"
+    "status": "открытых",
+    "chart_type": "pie",
+    "group_by": "project"
+  },
+  "needs_chart": true
+}
+
+Вход: "статистика задач по статусам как график"
+Выход: {
+  "intent": "analytics", 
+  "parameters": {
+    "chart_type": "bar",
+    "group_by": "status"
   },
   "needs_chart": true
 }
@@ -362,39 +386,93 @@ class LLMService:
         Returns:
             Dict с извлеченными сущностями
         """
-        system_prompt = """Ты извлекаешь сущности из запроса. Отвечай ТОЛЬКО JSON.
+        system_prompt = """Ты извлекаешь сущности из запроса пользователя. Отвечай ТОЛЬКО JSON.
 
-Пример: "найди баги с высоким приоритетом"
+ВРЕМЕННЫЕ ПЕРИОДЫ (time_period):
+• "сегодня", "за сегодня" → "сегодня"
+• "вчера", "за вчера" → "вчера" 
+• "эта неделя", "за эту неделю" → "эта неделя"
+• "прошлая неделя" → "прошлая неделя"
+• "этот месяц", "в этом месяце" → "этот месяц"
+• "прошлый месяц" → "прошлый месяц"
+• "в июле", "июль", "за июль" → "в июле"
+• "последняя неделя" → "последняя неделя"
+• "30 дней", "старше 30 дней" → "30 дней"
+
+СТАТУСЫ (status_intent):
+• "открыт", "открытых", "активн" → "open"
+• "закрыт", "закрыли", "готов", "завершен" → "closed"
+• "все", "любой" → "all"
+
+ТИПЫ ЗАПРОСОВ (query_type):
+• "сколько", "количество", "подсчет" → "count"
+• "статистика", "аналитика" → "analytics"
+• "найди", "покажи", "список" → "list"
+• "топ", "рейтинг" → "ranking"
+
+ТИПЫ ЗАДАЧ (issue_type):
+• "баг", "баги", "ошибка" → "Bug"
+• "задача", "таск" → "Task"
+• "эпик" → "Epic"
+
+ИСПОЛНИТЕЛИ (assignee):
+• "без исполнителя", "неназначен" → "UNASSIGNED"
+• "мои", "my", "назначенные мне" → "CURRENT_USER"
+
+ПРИОРИТЕТЫ (priority):
+• "высокий", "критический" → "High"
+• "низкий" → "Low"
+• "средний" → "Medium"
+
+ПРИМЕРЫ:
+
+"задачи созданные сегодня":
+{
+  "time_period": "сегодня",
+  "status_intent": "all",
+  "query_type": "list"
+}
+
+"сколько багов закрыли в июле":
+{
+  "issue_type": "Bug",
+  "status_intent": "closed", 
+  "time_period": "в июле",
+  "query_type": "count"
+}
+
+"задачи без исполнителя старше 30 дней":
+{
+  "assignee": "UNASSIGNED",
+  "time_period": "30 дней",
+  "query_type": "list"
+}
+
+"статистика по исполнителям":
+{
+  "query_type": "analytics"
+}
+
+ОТВЕЧАЙ ТОЛЬКО JSON С ПОЛЯМИ:
 {
   "client_name": null,
   "status_intent": "all",
   "time_period": null,
   "query_type": "list",
   "search_text": null,
-  "issue_type": "Bug",
+  "issue_type": null,
   "assignee": null,
-  "priority": "High"
-}
-
-Правила:
-• "баги" → issue_type = "Bug"
-• "высокий приоритет" → priority = "High" 
-• "найди" → query_type = "list"
-• "сколько" → query_type = "count"
-• "без исполнителя" → assignee = "UNASSIGNED"
-• "сегодня" → time_period = "сегодня"
-• "закрыли" → status_intent = "closed"
-
-ТОЛЬКО JSON:"""
+  "priority": null
+}"""
 
         try:
-            prompt = f'{user_question}'
+            prompt = f'ВОПРОС: "{user_question}"\n\nТЫ ОТВЕЧАЕШЬ ТОЛЬКО JSON БЕЗ ОБЪЯСНЕНИЙ:'
             
             result = await self.generate_completion(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.0,
-                max_tokens=150  # Увеличиваем для большего JSON
+                max_tokens=100  # Уменьшаем для принуждения к краткости
             )
             
             if result:
@@ -540,6 +618,9 @@ class LLMService:
         if assignee:
             if assignee == "UNASSIGNED":
                 assignee_jql = "assignee is EMPTY"
+            elif assignee == "CURRENT_USER":
+                assignee_jql = "assignee = currentUser()"
+                logger.info("Используется текущий пользователь для поиска")
             else:
                 # Ищем пользователя в маппингах или используем как есть
                 user_mappings = context.get("user_mappings", {})
@@ -617,11 +698,17 @@ class LLMService:
         
         # 8. Улучшенный fallback если ничего не найдено
         if not jql_parts:
-            if project:
+            # Определяем тип запроса для разного fallback
+            query_type = entities.get("query_type", "search")
+            
+            if query_type in ["analytics", "count", "ranking"]:
+                # Для аналитических запросов - все задачи за последний месяц
+                return 'created >= -30d'
+            elif project:
                 clean_project = self._clean_project_name(project)
                 return f'project = "{clean_project}"'
             else:
-                # Более разумный fallback - задачи текущего пользователя за неделю
+                # Для обычного поиска - задачи текущего пользователя
                 return 'assignee = currentUser() AND created >= startOfWeek()'
         
         final_jql = ' AND '.join(jql_parts)
@@ -652,6 +739,12 @@ class LLMService:
             return 'created >= -30d'
         elif time_lower in ['последняя неделя', 'за последнюю неделю']:
             return 'created >= -7d'
+        elif '30 дней' in time_lower or 'старше 30 дней' in time_lower:
+            return 'created <= -30d'  # Задачи старше 30 дней
+        elif '7 дней' in time_lower or 'старше 7 дней' in time_lower:
+            return 'created <= -7d'  # Задачи старше 7 дней
+        elif '1 день' in time_lower or 'старше 1 дня' in time_lower:
+            return 'created <= -1d'  # Задачи старше 1 дня
         
         # Конкретные месяцы (упрощенно - за текущий год)
         months_mapping = {

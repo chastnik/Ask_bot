@@ -160,14 +160,9 @@ start_app() {
     echo
     
     if command -v uvicorn &> /dev/null; then
-        # Запуск в режиме разработки с автоперезагрузкой
-        print_info "Запуск в режиме разработки..."
-        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \
-            --reload-dir="app" \
-            --reload-exclude="venv/**/*" \
-            --reload-exclude=".venv/**/*" \
-            --reload-exclude="*.egg-info/**/*" \
-            --reload-exclude="__pycache__/**/*"
+        # Запуск в стабильном режиме
+        print_info "Запуск в стабильном режиме..."
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
     else
         print_error "uvicorn не найден! Установите его: pip install uvicorn"
         exit 1
